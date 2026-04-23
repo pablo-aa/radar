@@ -1,0 +1,13 @@
+{
+  "name": "@radar/strategist",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "tsx src/create-resources.ts",
+    "run": "tsx src/run.ts"
+  },
+  "dependencies": {
+    "@radar/shared": "*"
+  }
+}
