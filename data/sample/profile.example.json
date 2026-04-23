@@ -1,0 +1,25 @@
+{
+  "name": "Ana Silva (sample)",
+  "github": "ana-dev-example",
+  "location": "São Paulo, Brazil",
+  "stack": ["TypeScript", "React", "Node", "Python"],
+  "experience_years": 3,
+  "employment_shape": "indie + contract",
+  "english_level": "B2",
+  "prior_programs": [],
+  "prior_wins": [
+    "Open-source contributor to a widely-used TS logging library",
+    "Built a fintech side-project that reached 2k MAU"
+  ],
+  "goals_2026": [
+    "Get into a top fellowship / accelerator",
+    "Ship a scalable OSS library",
+    "Build audience"
+  ],
+  "interest_areas": ["AI agents", "fintech", "indie SaaS"],
+  "travel": "open",
+  "preferred_work": "OSS + indie, open to full-time for the right role",
+  "hard_constraints": [
+    "No relocation > 6 months without exceptional reason"
+  ]
+}

@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.pnp.*
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# Secrets (CRITICAL — never commit)
+# ---------------------------------------------------------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ---------------------------------------------------------------------------
+# Personal data / sensitive experiments (CRITICAL)
+# Everything under data/private/ is for real user data during iteration.
+# Never commit. Only data/sample/ (fake data) may be committed.
+# ---------------------------------------------------------------------------
+data/private/
+data/private/**
+!data/private/.gitkeep
+!data/private/README.md
+
+# Personal notes / drafts outside the formal structure
+*.private.*
+*.personal.*
+NOTES.local.md
+TODO.local.md
+
+# ---------------------------------------------------------------------------
+# Runs / logs from agent experiments
+# ---------------------------------------------------------------------------
+agents/*/runs/
+logs/
+*.log
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json.example
+
+# ---------------------------------------------------------------------------
+# Supabase local state
+# ---------------------------------------------------------------------------
+supabase/.branches/
+supabase/.temp/
+supabase/logs/
+
+# ---------------------------------------------------------------------------
+# OMC state (local tooling, not part of the product)
+# ---------------------------------------------------------------------------
+.omc/
+.omc/**
