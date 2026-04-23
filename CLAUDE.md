@@ -29,6 +29,16 @@ Delegate specialized work to subagents rather than doing everything in the main 
 
 Work directly only for: trivial ops, single-file reads, git plumbing, small clarifications.
 
+## Fresh-clone setup
+
+Run once per clone before your first commit:
+
+```bash
+bash scripts/install-hooks.sh
+```
+
+This installs a pre-commit hook that blocks any staged diff containing value-matching API-key patterns (`sk-ant-...`, `sk-proj-...`, `ghp_...`, `xoxp-...`, `sb_secret_...`, JWT shapes) and refuses sensitive filenames (`.env*`, `*.key`, `*.pem`, `.agent-ids.json`). The hook lives under `.git/hooks/` which is not versioned, so you need to re-run the install in every fresh clone.
+
 ## Pre-commit protocol
 
 Before every `git commit`:
