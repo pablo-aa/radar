@@ -1,5 +1,7 @@
 # Radar
 
+![Radar — a visual history of the opportunities Brazilian developers miss](docs/assets/hero.webp)
+
 > A career-plan platform for Brazilian developers. Not a job board: a radar for the grants, fellowships, bolsas, and accelerators you didn't know existed.
 
 Built on Anthropic Managed Agents + Claude Opus 4.7. Submitted to the Cerebral Valley *"Built with 4.7"* hackathon, 2026-04.
