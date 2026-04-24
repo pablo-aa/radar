@@ -5,8 +5,15 @@
 import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import OppCardLink from "@/components/cards/OppCardLink";
+import StrategistAutoRunner from "@/components/StrategistAutoRunner";
+import AdminRerunButton from "@/components/AdminRerunButton";
 import { getProfile, getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
+import { isAdminProfile } from "@/lib/admin";
+import {
+  buildPicksMap,
+  computeStrategistState,
+} from "@/lib/agents/strategist/output-reader";
 import type {
   Opportunity,
   OpportunityCategory,
@@ -119,7 +126,7 @@ export default async function DashboardPage() {
           .from("strategist_runs")
           .select("*")
           .eq("user_id", user.id)
-          .order("finished_at", { ascending: false, nullsFirst: false })
+          .order("started_at", { ascending: false })
           .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
@@ -129,19 +136,41 @@ export default async function DashboardPage() {
   const scoutRun = (scoutRes.data as ScoutRun | null) ?? null;
   const stratRun = (stratRes.data as StrategistRun | null) ?? null;
 
+  const currentAnamnesisRunId = profile?.anamnesis_run_id ?? null;
+  const strategistState = computeStrategistState(stratRun, currentAnamnesisRunId);
+  const picksMap = buildPicksMap(stratRun);
+  const isAdmin = isAdminProfile(profile);
+
   const plan = extractPlan(stratRun);
   const highest = opps.length > 0 ? Math.max(...opps.map((o) => o.fit ?? 0)) : 0;
   const openNow = opps.filter((o) => /open|rolling|live|accepting/i.test(o.status ?? "")).length;
   const scoutAgo = scoutRun?.finished_at ? minutesAgo(scoutRun.finished_at) : "47m";
   const cycleLabel = scoutRun?.cycle_label ?? "week 17 · apr 20 to 26, 2026";
 
+  // Re-rank: Strategist picks first (by rank_in_section), non-picks after (by seed fit DESC).
+  function rerank(items: Opportunity[]): Opportunity[] {
+    const picked = items
+      .filter((o) => picksMap.has(o.id))
+      .sort((a, b) => {
+        const ra = picksMap.get(a.id)!.rank_in_section;
+        const rb = picksMap.get(b.id)!.rank_in_section;
+        return ra - rb;
+      });
+    const unpicked = items
+      .filter((o) => !picksMap.has(o.id))
+      .sort((a, b) => (b.fit ?? 0) - (a.fit ?? 0));
+    return [...picked, ...unpicked];
+  }
+
   const byCat = CATS.map((c) => ({
     cat: c,
-    items: opps
-      .filter((o) => o.category === c.id)
-      .slice()
-      .sort((a, b) => (b.fit ?? 0) - (a.fit ?? 0)),
+    items: rerank(opps.filter((o) => o.category === c.id)),
   })).filter((g) => g.items.length > 0);
+
+  const generating =
+    strategistState === "fresh" ||
+    strategistState === "stale" ||
+    strategistState === "running";
 
   return (
     <div className="wrap">
@@ -154,6 +183,11 @@ export default async function DashboardPage() {
         intakeSubmitted={true}
         onboardComplete={true}
       />
+
+      {/* Auto-trigger on fresh/stale; not on running (already in progress), error, or ready. */}
+      {(strategistState === "fresh" || strategistState === "stale") && (
+        <StrategistAutoRunner />
+      )}
 
       <div className="dash-hd">
         <div>
@@ -197,41 +231,7 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <div className="filter-row">
-        <button className="pill on" type="button">
-          All <span className="ct">{opps.length}</span>
-        </button>
-        {CATS.map((c) => {
-          const n = opps.filter((o) => o.category === c.id).length;
-          return (
-            <button key={c.id} className="pill" type="button">
-              {c.label} <span className="ct">{n}</span>
-            </button>
-          );
-        })}
-        <span className="spacer"></span>
-        <span className="sort">Sorted by fit · Strategist weighting</span>
-      </div>
-
-      {byCat.map(({ cat, items }) => (
-        <div key={cat.id} className="dash-section">
-          <div className="category-hd">
-            <h3>
-              <span className="n">/</span>
-              {cat.label}
-            </h3>
-            <span>
-              {items.length} · {cat.hint}
-            </span>
-          </div>
-          <div className="grid-3">
-            {items.map((o) => (
-              <OppCardLink key={o.id} o={o} />
-            ))}
-          </div>
-        </div>
-      ))}
-
+      {/* 90-day plan above the filter row */}
       <div className="plan">
         <h2>Strategist · 90-day plan</h2>
         <p className="sub">
@@ -254,6 +254,85 @@ export default async function DashboardPage() {
                   </li>
                 ))}
               </ol>
+            </div>
+          ))}
+        </div>
+        {isAdmin && (
+          <div style={{ marginTop: "1rem" }}>
+            <AdminRerunButton />
+          </div>
+        )}
+      </div>
+
+      <div className="filter-row">
+        <button className="pill on" type="button">
+          All <span className="ct">{opps.length}</span>
+        </button>
+        {CATS.map((c) => {
+          const n = opps.filter((o) => o.category === c.id).length;
+          return (
+            <button key={c.id} className="pill" type="button">
+              {c.label} <span className="ct">{n}</span>
+            </button>
+          );
+        })}
+        <span className="spacer"></span>
+        <span className="sort">Sorted by fit · Strategist weighting</span>
+      </div>
+
+      {/* Overlay during generation states */}
+      <div style={{ position: "relative" }}>
+        {generating && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 10,
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "center",
+              paddingTop: "3rem",
+              pointerEvents: "none",
+            }}
+          >
+            <div
+              style={{
+                background: "var(--surface-1, #fff)",
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: "8px",
+                padding: ".5rem 1.25rem",
+                fontSize: "13px",
+                color: "var(--ink-2, #6b7280)",
+                pointerEvents: "auto",
+              }}
+            >
+              {strategistState === "running"
+                ? "Strategist is ranking your opportunities…"
+                : "Strategist is starting, ranking your opportunities…"}
+            </div>
+          </div>
+        )}
+        <div style={{ opacity: generating ? 0.45 : 1, transition: "opacity .3s" }}>
+          {byCat.map(({ cat, items }) => (
+            <div key={cat.id} className="dash-section">
+              <div className="category-hd">
+                <h3>
+                  <span className="n">/</span>
+                  {cat.label}
+                </h3>
+                <span>
+                  {items.length} · {cat.hint}
+                </span>
+              </div>
+              <div className="grid-3">
+                {items.map((o) => (
+                  <OppCardLink
+                    key={o.id}
+                    o={o}
+                    pick={picksMap.get(o.id)}
+                  />
+                ))}
+              </div>
             </div>
           ))}
         </div>

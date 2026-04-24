@@ -4,7 +4,10 @@ import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import { getProfile, getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
-import type { Opportunity } from "@/lib/supabase/types";
+import {
+  buildPicksMap,
+} from "@/lib/agents/strategist/output-reader";
+import type { Opportunity, StrategistRun } from "@/lib/supabase/types";
 
 type DeepData = {
   why?: string;
@@ -29,15 +32,31 @@ export default async function OpportunityDetailPage({
   const { user } = await getServerUser();
   const profile = user ? await getProfile(user.id) : null;
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("opportunities")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-  const o = data as Opportunity | null;
+
+  const [oppRes, stratRes] = await Promise.all([
+    supabase.from("opportunities").select("*").eq("id", id).maybeSingle(),
+    user
+      ? supabase
+          .from("strategist_runs")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("status", "done")
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  const o = oppRes.data as Opportunity | null;
   if (!o) notFound();
 
+  const stratRun = (stratRes.data as StrategistRun | null) ?? null;
+  const picksMap = buildPicksMap(stratRun);
+  const pick = picksMap.get(o.id);
+
   const deep = extractDeep(o);
+  const fitDisplay = pick ? pick.fit_score : (o.fit ?? 0);
+  const whyDisplay = pick ? pick.why_you : deep.why;
 
   return (
     <div className="wrap">
@@ -62,6 +81,20 @@ export default async function OpportunityDetailPage({
                 <span className="tick"></span>
                 {o.badge ?? "bolsas · inscrições abertas"}
               </span>
+              {pick && (
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontFamily: "var(--mono)",
+                    color: "var(--accent, #6366f1)",
+                    fontWeight: 600,
+                    letterSpacing: ".04em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Strategist pick
+                </span>
+              )}
               <span>{o.id_display ?? `#${o.id.slice(0, 6)}`}</span>
               <span>
                 found by Scout ·{" "}
@@ -92,11 +125,11 @@ export default async function OpportunityDetailPage({
           <aside>
             <p className="score">Fit score · Strategist</p>
             <div className="big">
-              {o.fit ?? 0}
+              {fitDisplay}
               <span className="of"> /100</span>
             </div>
             <div className="bar">
-              <i style={{ width: (o.fit ?? 0) + "%" }}></i>
+              <i style={{ width: fitDisplay + "%" }}></i>
             </div>
             {deep.fitBreakdown && (
               <div className="breakdown">
@@ -121,10 +154,10 @@ export default async function OpportunityDetailPage({
 
         <div className="detail-body">
           <div>
-            {deep.why && (
+            {whyDisplay && (
               <div className="why-block">
                 <h3>Why you · Strategist</h3>
-                <p>{deep.why}</p>
+                <p>{whyDisplay}</p>
               </div>
             )}
 

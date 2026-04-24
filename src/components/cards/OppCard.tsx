@@ -1,4 +1,5 @@
 import type { Opportunity } from "@/lib/supabase/types";
+import type { PickOverride } from "@/lib/agents/strategist/output-reader";
 
 function truncate(s: string, n: number) {
   return s.length > n ? s.slice(0, n).trim() + "…" : s;
@@ -6,12 +7,17 @@ function truncate(s: string, n: number) {
 
 export default function OppCard({
   o,
+  pick,
   whyOverride,
 }: {
   o: Opportunity;
+  pick?: PickOverride;
   whyOverride?: string;
 }) {
-  const why = whyOverride ?? extractWhy(o);
+  const fitDisplay = pick ? pick.fit_score : (o.fit ?? 0);
+  const why = whyOverride ?? (pick ? pick.why_you : extractWhy(o));
+  const isStrategistPick = !!pick;
+
   return (
     <article className="ocard">
       <div className="crown">
@@ -24,9 +30,14 @@ export default function OppCard({
       <h3>{o.title}</h3>
       <p className="sub">{o.org}</p>
       <div className="fit">
-        <span className="num">{o.fit ?? 0}</span>
+        <span className="num">{fitDisplay}</span>
         <span className="of">/100</span>
         <span className="lbl">fit</span>
+        {isStrategistPick && (
+          <span className="lbl" style={{ marginLeft: ".5em", color: "var(--accent, #6366f1)" }}>
+            · strategist pick
+          </span>
+        )}
       </div>
       <dl>
         <dt>Deadline</dt>
