@@ -17,6 +17,17 @@ export type OpportunityCategory =
   | "rolling"
   | "arena";
 
+export type OpportunityType =
+  | "grant"
+  | "fellowship"
+  | "scholarship"
+  | "accelerator"
+  | "arena"
+  | "competition"
+  | "event"
+  | "community"
+  | "internship";
+
 export type ScoutDiscardReason =
   | "out-of-scope"
   | "duplicate"
@@ -40,6 +51,8 @@ export type Profile = {
   structured_profile: Record<string, unknown> | null;
   onboard_state: OnboardState;
   anamnesis_run_id: string | null;
+  city: string | null;
+  state: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -55,6 +68,8 @@ export type ProfileInsert = {
   structured_profile?: Record<string, unknown> | null;
   onboard_state?: OnboardState;
   anamnesis_run_id?: string | null;
+  city?: string | null;
+  state?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -69,6 +84,7 @@ export type Opportunity = {
   org: string | null;
   loc: string | null;
   category: OpportunityCategory;
+  opportunity_type: OpportunityType | null;
   deadline: string | null;
   funding_brl: string | null;
   commitment: string | null;
@@ -79,6 +95,9 @@ export type Opportunity = {
   found_at: string | null;
   deep_data: Record<string, unknown> | null;
   scout_run_id: string | null;
+  seniority: string[] | null;
+  audience: string[] | null;
+  location_req: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -90,6 +109,7 @@ export type OpportunityInsert = {
   org?: string | null;
   loc?: string | null;
   category: OpportunityCategory;
+  opportunity_type?: OpportunityType | null;
   deadline?: string | null;
   funding_brl?: string | null;
   commitment?: string | null;
@@ -100,6 +120,9 @@ export type OpportunityInsert = {
   found_at?: string | null;
   deep_data?: Record<string, unknown> | null;
   scout_run_id?: string | null;
+  seniority?: string[] | null;
+  audience?: string[] | null;
+  location_req?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -119,6 +142,7 @@ export type ScoutRun = {
   discarded_count: number;
   agent_session_id: string | null;
   status: RunStatus;
+  output: Record<string, unknown> | null;
   created_at: string;
 };
 
@@ -134,6 +158,7 @@ export type ScoutRunInsert = {
   discarded_count?: number;
   agent_session_id?: string | null;
   status?: RunStatus;
+  output?: Record<string, unknown> | null;
   created_at?: string;
 };
 
@@ -265,6 +290,7 @@ export type Database = {
     Functions: { [key: string]: never };
     Enums: {
       scout_discard_reason: ScoutDiscardReason;
+      opportunity_type: OpportunityType;
     };
     CompositeTypes: { [key: string]: never };
   };
