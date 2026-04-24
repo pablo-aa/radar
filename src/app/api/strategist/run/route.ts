@@ -1,140 +1,87 @@
 // POST /api/strategist/run
 //
-// MVP stub: returns mock output until the Strategist Managed Agent is
-// wired up. Snapshots the caller's profile and the top 12 opportunities
-// (by fit) into strategist_runs.profile_snapshot and opportunity_ids,
-// then persists a mock output block matching the contract the real agent
-// will emit.
+// Runs the Strategist Managed Agent for the authenticated user.
+// Inserts a strategist_runs row with status "running" at session-create time,
+// drains the MA event stream server-side, then updates the row to "done" or
+// "error".
+//
+// Idempotency order (per-request, top-to-bottom):
+//   1. Auth guard
+//   2. Parse body (accepts optional { force?: boolean })
+//   3. Load profile — capture currentAnamnesisRunId
+//   4. Admin check (ADMIN_GITHUB_HANDLES env var, comma-separated handles)
+//   5. Done guard (skip if force && isAdmin): if latest row is done AND
+//      profile_snapshot.anamnesis_run_id matches current, return cached
+//   6. Running guard (skip if force && isAdmin): 5-min window → 409
+//   7. Proceed with session create → insert → drain → update
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeCycleLabel } from "@/lib/cycle";
+import { createStrategistSession } from "@/lib/agents/strategist/run-agent";
+import { isAdminProfile } from "@/lib/admin";
 import type { Opportunity, Profile } from "@/lib/supabase/types";
+
+// Route-level config: the Managed Agent stream is long-lived (up to 120s)
+// and must bypass Next.js fetch caching / request memoization to keep the
+// outbound SSE connection live.
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+export const maxDuration = 300;
 
 type StrategistBody = {
   cycle_label?: string;
+  force?: boolean;
 };
 
 function optionalString(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
+/**
+ * Casts a typed value to the Record<string, unknown> shape expected by
+ * Supabase JSONB columns. The structural type information is intentionally
+ * erased here: JSONB storage does not preserve TypeScript types, and
+ * re-reading the column returns plain JSON. One cast per JSONB write is
+ * acceptable; duplicating `as unknown as ...` at each call site is not.
+ */
+function toJsonb<T>(v: T): Record<string, unknown> {
+  return v as unknown as Record<string, unknown>;
+}
+
 function parseBody(raw: unknown): StrategistBody {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
-  return { cycle_label: optionalString(r.cycle_label) };
-}
-
-function pickByCategory(
-  opportunities: Opportunity[],
-  category: Opportunity["category"],
-  limit: number,
-): Opportunity[] {
-  return opportunities
-    .filter((o) => o.category === category)
-    .slice(0, limit);
-}
-
-function buildMockOutput(
-  profile: Profile,
-  opps: Opportunity[],
-): Record<string, unknown> {
-  const handle = profile.github_handle ?? "founder";
-
-  const dated = pickByCategory(opps, "dated_one_shot", 3).map((o) => ({
-    opportunity_id: o.id,
-    title: o.title,
-    source_url: o.source_url,
-    deadline: o.deadline,
-    funding_brl: o.funding_brl,
-    fit_score: o.fit,
-    prep_required:
-      "Tighten the monograph framing into a two-paragraph lede. Pre-write the red-team response to the 'why this, why now' question. Lead with the exit, not the audience size.",
-    why_you: `Your public trajectory, ${handle} on GitHub, the Cosseno exit in 2024, and the T5 monograph, is legible to this panel in one paragraph. The exit resolves 'can this person ship'. The monograph supplies the research voice. The two together land at the exact bend this program is trying to fund.`,
-  }));
-
-  const recurrent = pickByCategory(opps, "recurrent_annual", 3).map((o) => ({
-    opportunity_id: o.id,
-    title: o.title,
-    source_url: o.source_url,
-    next_window: o.deadline,
-    fit_score: o.fit,
-    cadence_note:
-      "Annual window. Start the file now, revise monthly, submit in the first week of the open period.",
-    why_you: `The panel rewards track record over pedigree. Your OSS footprint under ${handle} and the published monograph replace the usual academic signal. Prepare early, the advantage compounds with each revision.`,
-  }));
-
-  const rolling = pickByCategory(opps, "rolling", 2).map((o) => ({
-    opportunity_id: o.id,
-    title: o.title,
-    source_url: o.source_url,
-    fit_score: o.fit,
-    when_to_engage:
-      "Apply inside the next 30 days. Rolling review compresses in Q2, decisions come back in 6 to 10 weeks.",
-    why_you: `Rolling reviewers respond to sharp scope. Anchor the pitch on one research agenda, cite the monograph as the artifact of prior work, and keep the budget under the threshold that lets them approve without escalation.`,
-  }));
-
-  const arenas = pickByCategory(opps, "arena", 3).map((o) => ({
-    opportunity_id: o.id,
-    title: o.title,
-    source_url: o.source_url,
-    fit_score: o.fit,
-    entry_point:
-      "Low-friction first submission. Use your existing monograph methodology, retarget to this venue's evaluation frame.",
-    suggested_cadence: "One high-effort submission per quarter.",
-    why_you: `Arenas reward legibility, not applications. Your Instagram of 60k and the published monograph already give you the shape this venue rewards. The cost of a first attempt is two weekends, the upside is a persistent leaderboard entry under ${handle}.`,
-  }));
-
-  // Build the 90-day plan, sequenced across the first three months. Tie each
-  // action to a concrete opportunity via `unlocks`, using real IDs we just
-  // snapshotted.
-  const firstDated = dated[0]?.opportunity_id ?? opps[0]?.id ?? null;
-  const firstRolling = rolling[0]?.opportunity_id ?? firstDated;
-  const firstArena = arenas[0]?.opportunity_id ?? firstDated;
-  const firstRecurrent = recurrent[0]?.opportunity_id ?? firstDated;
-  const secondDated = dated[1]?.opportunity_id ?? firstDated;
-
-  const ninetyDayPlan = [
-    {
-      week_range: "W01-W02",
-      action:
-        "Draft the dated-one-shot application. Compress the monograph and exit into a single-page lede, run one round of red-team review.",
-      unlocks: firstDated,
-    },
-    {
-      week_range: "W03-W04",
-      action:
-        "Submit the first arena entry. Repackage the monograph's evaluation methodology for this venue's rubric, ship inside 10 working days.",
-      unlocks: firstArena,
-    },
-    {
-      week_range: "W05-W07",
-      action:
-        "File the rolling RFP. Lock the scope at one agenda, keep budget under the approval threshold, submit with two reference letters already in hand.",
-      unlocks: firstRolling,
-    },
-    {
-      week_range: "W08-W10",
-      action:
-        "Open the file for the annual panel. Outline, sample chapter, budget draft. No submission yet, the goal is a mature proposal by the public window.",
-      unlocks: firstRecurrent,
-    },
-    {
-      week_range: "W11-W13",
-      action:
-        "Submit the second dated-one-shot application. Tighten the pitch on the basis of feedback from the first submission; reuse 70% of the narrative.",
-      unlocks: secondDated,
-    },
-  ].filter((entry) => entry.unlocks !== null);
-
   return {
-    run_summary: `Post-exit founder, T5 monograph, ICPC bronze. Strongest signals point to research-track grants and arena entries this week. ${handle} has the legibility to convert on 2 of 3 dated applications inside 90 days.`,
-    dated_one_shot: dated,
-    recurrent_annual: recurrent,
-    rolling,
-    arenas,
-    ninety_day_plan: ninetyDayPlan,
+    cycle_label: optionalString(r.cycle_label),
+    force: r.force === true,
+  };
+}
+
+/** Narrow an unknown error to a safe redacted shape for DB storage. */
+function redactError(
+  err: unknown,
+  sessionId?: string,
+): { code: string; message: string; request_id?: string; session_id?: string } {
+  if (err instanceof Error) {
+    const e = err as Error & {
+      status?: number;
+      error?: { type?: string };
+      request_id?: string;
+    };
+    return {
+      code: e.error?.type ?? e.name ?? "unknown_error",
+      message: e.message,
+      request_id: e.request_id,
+      session_id: sessionId,
+    };
+  }
+  return {
+    code: "unknown_error",
+    message: "An unexpected error occurred.",
+    session_id: sessionId,
   };
 }
 
@@ -144,7 +91,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (auth.error || !auth.data.user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const user = auth.data.user;
+  // user_id is ALWAYS from the auth session, never from the request body.
+  const userId = auth.data.user.id;
 
   let raw: unknown = null;
   try {
@@ -154,24 +102,95 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const body = parseBody(raw);
   const cycleLabel = body.cycle_label ?? computeCycleLabel();
+  const forceRequested = body.force === true;
 
   const admin = createAdminClient();
 
+  // Read profile.
   const profileRead = await admin
     .from("profiles")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
 
   if (profileRead.error) {
-    console.error("[api/strategist/run] profile read failed", profileRead.error);
-    return NextResponse.json({ error: "profile_read_failed" }, { status: 500 });
+    console.error(
+      "[api/strategist/run] profile read failed",
+      profileRead.error,
+    );
+    return NextResponse.json(
+      { error: "profile_read_failed" },
+      { status: 500 },
+    );
   }
   if (!profileRead.data) {
     return NextResponse.json({ error: "profile_not_found" }, { status: 404 });
   }
   const profile = profileRead.data as Profile;
 
+  const adminUser = isAdminProfile(profile);
+  const bypassGuards = forceRequested && adminUser;
+
+  if (bypassGuards) {
+    console.log("[api/strategist/run] force override by admin", {
+      user_id: userId,
+      github_handle: profile.github_handle,
+    });
+  }
+
+  const currentAnamnesisRunId = profile.anamnesis_run_id ?? null;
+
+  // Done guard: if latest row is done and anamnesis_run_id matches, return cached.
+  if (!bypassGuards) {
+    const { data: latestRun } = await admin
+      .from("strategist_runs")
+      .select("id, status, cycle_label, output, profile_snapshot")
+      .eq("user_id", userId)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestRun && latestRun.status === "done") {
+      const snapshot = latestRun.profile_snapshot as Record<string, unknown> | null;
+      const snapshotAnamnesisRunId =
+        snapshot && typeof snapshot.anamnesis_run_id === "string"
+          ? snapshot.anamnesis_run_id
+          : null;
+      if (snapshotAnamnesisRunId === currentAnamnesisRunId) {
+        const output = latestRun.output as Record<string, unknown> | null;
+        const cardsCount = output
+          ? (countCards(output))
+          : 0;
+        return NextResponse.json({
+          run_id: latestRun.id,
+          cycle_label: latestRun.cycle_label ?? cycleLabel,
+          cards_count: cardsCount,
+          cached: true,
+        });
+      }
+    }
+  }
+
+  // Running guard: reject if a running row exists within the last 5 minutes.
+  if (!bypassGuards) {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    const { data: existingRun } = await admin
+      .from("strategist_runs")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("status", "running")
+      .gt("started_at", fiveMinutesAgo)
+      .maybeSingle();
+
+    if (existingRun) {
+      return NextResponse.json(
+        { error: "run_in_progress", run_id: existingRun.id },
+        { status: 409 },
+      );
+    }
+  }
+
+  // Read top 12 opportunities by fit.
   const oppsRead = await admin
     .from("opportunities")
     .select("*")
@@ -179,8 +198,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .limit(12);
 
   if (oppsRead.error) {
-    console.error("[api/strategist/run] opportunities read failed", oppsRead.error);
-    return NextResponse.json({ error: "opportunities_read_failed" }, { status: 500 });
+    console.error(
+      "[api/strategist/run] opportunities read failed",
+      oppsRead.error,
+    );
+    return NextResponse.json(
+      { error: "opportunities_read_failed" },
+      { status: 500 },
+    );
   }
   const opportunities = (oppsRead.data ?? []) as Opportunity[];
   const opportunityIds = opportunities.map((o) => o.id);
@@ -197,21 +222,40 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     snapshot_at: new Date().toISOString(),
   };
 
-  const output = buildMockOutput(profile, opportunities);
+  // Create MA session: returns session_id before draining so the DB row can be written first.
+  const strategistInput = {
+    profile: profileSnapshot,
+    opportunities: opportunities.map(toJsonb),
+  };
 
+  let sessionHandle: Awaited<ReturnType<typeof createStrategistSession>>;
+  try {
+    sessionHandle = await createStrategistSession(strategistInput);
+  } catch (err: unknown) {
+    console.error("[api/strategist/run] session create failed", err);
+    const redacted = redactError(err);
+    return NextResponse.json(
+      { error: "strategist_session_failed", detail: redacted.code },
+      { status: 500 },
+    );
+  }
+
+  const sessionId = sessionHandle.session_id;
   const nowIso = new Date().toISOString();
+
+  // INSERT running row BEFORE draining the stream (audit trail + double-submit guard).
   const runInsert = await admin
     .from("strategist_runs")
     .insert({
-      user_id: user.id,
+      user_id: userId,
       cycle_label: cycleLabel,
       started_at: nowIso,
-      finished_at: nowIso,
-      status: "done",
+      finished_at: null,
+      status: "running",
       profile_snapshot: profileSnapshot,
       opportunity_ids: opportunityIds,
-      output,
-      agent_session_id: null,
+      output: null,
+      agent_session_id: sessionId,
     })
     .select("id")
     .single();
@@ -221,16 +265,85 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "run_insert_failed" }, { status: 500 });
   }
 
-  // Card count is the sum of the four category arrays in the output payload.
-  const dated = Array.isArray(output.dated_one_shot) ? output.dated_one_shot.length : 0;
-  const recurrent = Array.isArray(output.recurrent_annual) ? output.recurrent_annual.length : 0;
-  const rolling = Array.isArray(output.rolling) ? output.rolling.length : 0;
-  const arenas = Array.isArray(output.arenas) ? output.arenas.length : 0;
-  const cardsCount = dated + recurrent + rolling + arenas;
+  const runId: string = runInsert.data.id;
 
-  return NextResponse.json({
-    run_id: runInsert.data.id,
-    cycle_label: cycleLabel,
-    cards_count: cardsCount,
-  });
+  // Drain the MA stream.
+  try {
+    const { output, meta } = await sessionHandle.drain();
+
+    // Update row to done.
+    await admin
+      .from("strategist_runs")
+      .update({
+        status: "done",
+        finished_at: new Date().toISOString(),
+        output: toJsonb(output),
+      })
+      .eq("id", runId);
+
+    console.log("[api/strategist/run]", {
+      user_id: userId,
+      run_id: runId,
+      session_id: sessionId,
+      input_tokens: meta.usage.input_tokens,
+      output_tokens: meta.usage.output_tokens,
+      cost_usd: meta.cost_usd,
+    });
+
+    const cardsCount =
+      output.dated_one_shot.length +
+      output.recurrent_annual.length +
+      output.rolling.length +
+      output.arenas.length +
+      (output.ninety_day_plan?.length ?? 0);
+
+    return NextResponse.json({
+      run_id: runId,
+      cycle_label: cycleLabel,
+      cards_count: cardsCount,
+    });
+  } catch (err: unknown) {
+    const redacted = redactError(err, sessionId);
+    console.error("[api/strategist/run] drain failed", {
+      run_id: runId,
+      session_id: sessionId,
+      code: redacted.code,
+      message: redacted.message,
+    });
+
+    // Update row to error with redacted metadata.
+    await admin
+      .from("strategist_runs")
+      .update({
+        status: "error",
+        finished_at: new Date().toISOString(),
+        output: {
+          _meta: {
+            error: redacted,
+            session_id: sessionId,
+          },
+        },
+      })
+      .eq("id", runId);
+
+    return NextResponse.json(
+      { error: "strategist_run_failed", run_id: runId },
+      { status: 500 },
+    );
+  }
+}
+
+/** Count total cards across all output buckets (used for cached response). */
+function countCards(output: Record<string, unknown>): number {
+  const arr = (key: string) => {
+    const v = output[key];
+    return Array.isArray(v) ? v.length : 0;
+  };
+  return (
+    arr("dated_one_shot") +
+    arr("recurrent_annual") +
+    arr("rolling") +
+    arr("arenas") +
+    arr("ninety_day_plan")
+  );
 }

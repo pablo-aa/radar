@@ -56,6 +56,7 @@ export default [
         KeyboardEvent: "readonly",
         Node: "readonly",
         AbortController: "readonly",
+        AbortSignal: "readonly",
         Response: "readonly",
         Request: "readonly",
       },

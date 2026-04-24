@@ -9,7 +9,9 @@
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "strategist:setup": "tsx scripts/strategist/create-resources.ts",
+    "strategist:list": "tsx scripts/strategist/list-resources.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
@@ -18,7 +20,8 @@
     "dotenv": "^16.4.0",
     "next": "^16.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "undici": "^7.25.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
