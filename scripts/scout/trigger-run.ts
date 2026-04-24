@@ -50,7 +50,7 @@ const maxCostUsd = process.env.MAX_COST_USD ? parseFloat(process.env.MAX_COST_US
 const queueSize = process.env.QUEUE_SIZE ? parseInt(process.env.QUEUE_SIZE, 10) : 50;
 const maxSourcesPerRun = process.env.MAX_SOURCES_PER_RUN
   ? parseInt(process.env.MAX_SOURCES_PER_RUN, 10)
-  : 100;
+  : 50;
 
 const admin = createClient(supabaseUrl, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -141,6 +141,33 @@ async function main(): Promise<void> {
     opportunity_type: d.opportunity_type as ScoutSource["opportunity_type"],
     expected_loc: "global",
   }));
+
+  // Overflow: URLs we did not fit in this run go to scout_queue so a future
+  // run picks them up. Nothing is lost from sitemap expansion. Uses upsert
+  // semantics via unique index on url; duplicates silently bump priority.
+  const overflow = expanded.slice(maxSourcesPerRun);
+  if (overflow.length > 0) {
+    const overflowRows = overflow.map((d) => ({
+      url: d.url,
+      hint: d.hint,
+      opportunity_type: d.opportunity_type,
+      discovered_from: runId,
+      priority_score: 1.0,
+      status: "pending" as const,
+    }));
+    // Chunk to avoid oversized payloads.
+    const chunkSize = 100;
+    for (let i = 0; i < overflowRows.length; i += chunkSize) {
+      const chunk = overflowRows.slice(i, i + chunkSize);
+      const { error } = await admin
+        .from("scout_queue")
+        .upsert(chunk, { onConflict: "url", ignoreDuplicates: true });
+      if (error) {
+        console.warn(`[scout] overflow upsert batch failed: ${error.message}`);
+      }
+    }
+    console.log(`[scout] ${overflow.length} overflow URLs queued for next run`);
+  }
 
   console.log(
     `[scout] seeds: ${pilotSources.length} manual + ${queuedSources.length} queued + ${derivedCount} from sitemaps = ${finalSources.length} (capped at ${maxSourcesPerRun}), cost cap $${maxCostUsd}`,

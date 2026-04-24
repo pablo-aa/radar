@@ -6,7 +6,11 @@ on:
       max_cost_usd:
         description: "Cost cap for this run (USD)"
         required: false
-        default: "2"
+        default: "10"
+      max_sources:
+        description: "Max sources to process this run"
+        required: false
+        default: "50"
   # Weekly Monday 7am BRT (10am UTC). Uncomment to enable cron.
   # schedule:
   #   - cron: "0 10 * * 1"
@@ -14,7 +18,7 @@ on:
 jobs:
   scout:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -39,4 +43,5 @@ jobs:
           SCOUT_AGENT_ID: ${{ secrets.SCOUT_AGENT_ID }}
           SCOUT_ENVIRONMENT_ID: ${{ secrets.SCOUT_ENVIRONMENT_ID }}
           MAX_COST_USD: ${{ github.event.inputs.max_cost_usd }}
+          MAX_SOURCES_PER_RUN: ${{ github.event.inputs.max_sources }}
         run: npx tsx scripts/scout/trigger-run.ts
