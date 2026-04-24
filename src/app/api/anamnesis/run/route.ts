@@ -32,6 +32,7 @@ export const maxDuration = 300;
 type AnamnesisBody = {
   force?: boolean;
   moment_text?: string;
+  cv_url?: string;
 };
 
 function parseBody(raw: unknown): AnamnesisBody {
@@ -40,6 +41,7 @@ function parseBody(raw: unknown): AnamnesisBody {
   return {
     force: r.force === true,
     moment_text: typeof r.moment_text === "string" ? r.moment_text : undefined,
+    cv_url: typeof r.cv_url === "string" && r.cv_url.length > 0 ? r.cv_url : undefined,
   };
 }
 
@@ -143,6 +145,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { error: "run_in_progress", run_id: existingRun.id },
         { status: 409 },
       );
+    }
+  }
+
+  // 6.5. Persist cv_url from the body into the profile so the Anamnesis
+  // input block below (and any re-run) reads it consistently. The upload
+  // step on the client saves the blob to Storage but does not write the
+  // path into profiles; the route does it here in one place.
+  // Ownership enforcement: reject any path that is not inside the caller's
+  // own storage folder, otherwise a POST with someone else's cv path would
+  // overwrite this user's row and could leak another user's CV downstream.
+  if (body.cv_url && body.cv_url !== profile.cv_url) {
+    if (!body.cv_url.startsWith(`${userId}/`)) {
+      return NextResponse.json({ error: "invalid_cv_url" }, { status: 400 });
+    }
+    const cvWrite = await admin
+      .from("profiles")
+      .update({ cv_url: body.cv_url })
+      .eq("user_id", userId);
+    if (cvWrite.error) {
+      console.warn(
+        "[api/anamnesis/run] failed to persist cv_url (non-fatal)",
+        cvWrite.error,
+      );
+    } else {
+      profile.cv_url = body.cv_url;
     }
   }
 

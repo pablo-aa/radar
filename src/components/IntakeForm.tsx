@@ -182,6 +182,22 @@ export default function IntakeForm({
           moment_text: momentTrimmed,
         }),
       });
+      // 409: a run is already in flight for this user. UI should treat this
+      // as "keep going to /generating" so the user sees the loading screen
+      // and the server resolves the existing run gracefully.
+      if (res.status === 409) {
+        router.push("/generating");
+        return;
+      }
+      // 200 with cached: true: a finished run already exists. Go straight
+      // to the report instead of starting a new one.
+      if (res.status === 200) {
+        const data = await res.json().catch(() => null);
+        if (data && typeof data === "object" && (data as { cached?: boolean }).cached) {
+          router.push("/report");
+          return;
+        }
+      }
       if (!res.ok) {
         setSubmitting(false);
         setSubmitErr("Could not start the run. Try again.");
