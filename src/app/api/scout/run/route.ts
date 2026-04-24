@@ -140,11 +140,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const scoutRunId: string = runInsert.data.id;
 
-  // Expose the run id so the drain executor can inject it into tool calls.
-  process.env.SCOUT_RUN_ID = scoutRunId;
-
   try {
-    const handle = await createScoutSession(sources);
+    const handle = await createScoutSession(sources, scoutRunId);
 
     // Record the session_id on the run row before draining.
     await admin

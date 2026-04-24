@@ -78,6 +78,7 @@ const HARD_TIMEOUT_MS = 15 * 60 * 1_000;
  */
 export async function createScoutSession(
   sources: ScoutSource[],
+  scoutRunId: string,
 ): Promise<ScoutSessionHandle> {
   let agentId: string;
   let environmentId: string;
@@ -98,7 +99,7 @@ export async function createScoutSession(
   return {
     session_id: sessionId,
     drain: (options?: ScoutDrainOptions) =>
-      drainSession(client, sessionId, sources, options),
+      drainSession(client, sessionId, sources, scoutRunId, options),
   };
 }
 
@@ -110,6 +111,7 @@ async function drainSession(
   client: ReturnType<typeof getAnthropicClient>,
   sessionId: string,
   sources: ScoutSource[],
+  scoutRunId: string,
   options?: ScoutDrainOptions,
 ): Promise<ScoutDrainResult> {
   const startedAt = new Date().toISOString();
@@ -128,15 +130,6 @@ async function drainSession(
   let iterations = 0;
   let lastAgentText = "";
   let costCapMessageSent = false;
-
-  // We use a placeholder scout_run_id here. The caller should have already
-  // inserted the scout_runs row and can pass the run_id via a source hint or
-  // inject it. For now we derive a sentinel that the drain caller can replace
-  // by passing it as part of source metadata. The actual injection happens in
-  // the trigger script which sets SCOUT_RUN_ID env before draining.
-  // executors.ts requires scout_run_id on each call; the agent is
-  // instructed to pass it, but we also inject it as a fallback below.
-  const scoutRunId = process.env.SCOUT_RUN_ID ?? "unknown";
 
   const userText = buildScoutMaUserMessage(sources);
 

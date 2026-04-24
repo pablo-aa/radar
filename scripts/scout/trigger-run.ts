@@ -75,11 +75,8 @@ async function main(): Promise<void> {
   const runId: string = runInsert.data.id;
   console.log(`run_id: ${runId}`);
 
-  // Expose the run id so the drain executor can inject it into tool calls.
-  process.env.SCOUT_RUN_ID = runId;
-
   console.log("Creating Scout session...");
-  const handle = await createScoutSession(SCOUT_PILOT_SOURCES);
+  const handle = await createScoutSession(SCOUT_PILOT_SOURCES, runId);
   console.log(`session_id: ${handle.session_id}`);
 
   // Update the scout_runs row with the session_id before draining.

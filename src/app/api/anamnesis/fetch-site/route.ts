@@ -12,6 +12,7 @@
 //   400: { error: string }   // bad input
 
 import { NextResponse, type NextRequest } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 
 const MAX_BYTES = 100 * 1024; // 100KB
 const TIMEOUT_MS = 5000;
@@ -38,6 +39,12 @@ function cleanText(s: string): string {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const supabase = await createClient();
+  const auth = await supabase.auth.getUser();
+  if (auth.error || !auth.data.user) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   let raw: unknown;
   try {
     raw = await request.json();
@@ -64,7 +71,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     response = await fetch(parsed.toString(), {
       redirect: "follow",
-      // eslint-disable-next-line no-undef
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         "User-Agent": "radar-app",

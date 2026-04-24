@@ -132,6 +132,10 @@ export async function GET(request: NextRequest) {
     return waitlistRedirect(request, { handle });
   }
 
+  // Invites are multi-use by design during beta: once stamped, the user can
+  // re-login freely. Paid agent routes carry their own done and running
+  // guards, so re-logging in does not re-trigger Strategist, Anamnesis, or
+  // Scout. Revisit for single-use semantics at GA.
   if (!inviteLookup.data.used_at) {
     const stamp = await inviteDb
       .from("invites")
