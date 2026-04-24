@@ -80,8 +80,13 @@ async function main() {
     console.log(`output_tokens: ${result._meta.usage.output_tokens}`);
     console.log(`cost_usd:      $${result._meta.cost_usd.toFixed(4)}`);
     console.log(`\nsummary_one_line: ${result.profile.summary_one_line}`);
-    console.log(`\nstrengths:`);
+    console.log(`\nstrengths (profile):`);
     for (const s of result.profile.strengths) console.log(`  - ${s}`);
+    console.log(`\nreport.headline.lede: ${result.report.headline.lede}`);
+    console.log(`\nreport.strengths (top 2):`);
+    for (const s of result.report.strengths.slice(0, 2)) {
+      console.log(`  [${s.n}] ${s.name} (score: ${s.score}) - ${s.evidence}`);
+    }
     console.log(`\ntrajectory: ${result.profile.trajectory}`);
 
     const finishedAt = new Date().toISOString();

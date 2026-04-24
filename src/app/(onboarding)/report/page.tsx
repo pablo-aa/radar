@@ -34,6 +34,23 @@ async function fetchReport(userId: string): Promise<AnamnesisReport | null> {
       .maybeSingle();
     if (data?.output && typeof data.output === "object") {
       const out = data.output as Record<string, unknown>;
+      // New shape: output.report holds the editorial report.
+      if (
+        typeof out["report"] === "object" &&
+        out["report"] !== null &&
+        !Array.isArray(out["report"])
+      ) {
+        const rep = out["report"] as Record<string, unknown>;
+        if (
+          "meta" in rep &&
+          "headline" in rep &&
+          "timeline" in rep &&
+          "archetype" in rep
+        ) {
+          return rep as unknown as AnamnesisReport;
+        }
+      }
+      // Legacy shape: report fields at the top level.
       if (
         "meta" in out &&
         "headline" in out &&

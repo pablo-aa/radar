@@ -10,6 +10,7 @@ import type {
   AnamnesisUsage,
   AnamnesisContentBlock,
 } from "./types";
+import type { AnamnesisReport } from "@/lib/sample-data/anamnesis-report";
 
 const MAX_ITERATIONS = 12;
 const TIMEOUT_MS = 180_000;
@@ -52,7 +53,15 @@ function parseProfileJson(raw: string): AnamnesisProfile {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Anamnesis agent final response was not a JSON object.");
   }
-  const obj = parsed as Record<string, unknown>;
+  const outer = parsed as Record<string, unknown>;
+
+  // Accept both the new wrapper { profile, report } and the legacy flat profile.
+  const obj: Record<string, unknown> =
+    typeof outer["profile"] === "object" &&
+    outer["profile"] !== null &&
+    !Array.isArray(outer["profile"])
+      ? (outer["profile"] as Record<string, unknown>)
+      : outer;
 
   // Validate required string fields.
   const requireString = (key: string): string => {
@@ -98,6 +107,55 @@ function parseProfileJson(raw: string): AnamnesisProfile {
     weak_spots: requireStringArray("weak_spots"),
     cited_profile_fields: requireStringArray("cited_profile_fields"),
   };
+}
+
+function parseReportJson(raw: string): AnamnesisReport {
+  const cleaned = stripFences(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (err) {
+    throw new Error(
+      `Anamnesis agent returned non-JSON for report: ${String(err)}`,
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Anamnesis agent report was not a JSON object.");
+  }
+  const outer = parsed as Record<string, unknown>;
+
+  // The report lives at outer.report when the new wrapper is used.
+  const obj: Record<string, unknown> =
+    typeof outer["report"] === "object" &&
+    outer["report"] !== null &&
+    !Array.isArray(outer["report"])
+      ? (outer["report"] as Record<string, unknown>)
+      : outer;
+
+  // Require the four sentinel fields the /report page checks for.
+  const required = ["meta", "headline", "timeline", "archetype"] as const;
+  for (const key of required) {
+    if (typeof obj[key] !== "object" || obj[key] === null) {
+      throw new Error(
+        `AnamnesisReport missing required section: "${key}". Agent output may be truncated or malformed.`,
+      );
+    }
+  }
+
+  // Cast to AnamnesisReport. Detailed field validation would be verbose and
+  // the render components handle missing optional fields gracefully, so we
+  // trust the shape after the sentinel check.
+  return obj as unknown as AnamnesisReport;
+}
+
+/** Parse the full wrapper { profile, report } from the agent's final text. */
+function parseOutputJson(raw: string): {
+  profile: AnamnesisProfile;
+  report: AnamnesisReport;
+} {
+  const profile = parseProfileJson(raw);
+  const report = parseReportJson(raw);
+  return { profile, report };
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +212,7 @@ export async function runAnamnesis(
     const res = await client.messages.create(
       {
         model: "claude-opus-4-7",
-        max_tokens: 4096,
+        max_tokens: 16384,
         system: ANAMNESIS_SYSTEM_PROMPT,
         tools: ANAMNESIS_TOOLS as unknown as Parameters<typeof client.messages.create>[0]["tools"],
         messages,
@@ -219,12 +277,13 @@ export async function runAnamnesis(
         );
       }
 
-      const profile = parseProfileJson(finalText);
+      const { profile, report } = parseOutputJson(finalText);
       const finishedAt = new Date().toISOString();
       const costUsd = computeCostUsd(usage);
 
       const output: AnamnesisOutput = {
         profile,
+        report,
         _meta: {
           model: "claude-opus-4-7",
           usage,

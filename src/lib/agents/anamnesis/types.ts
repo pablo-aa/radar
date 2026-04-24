@@ -51,6 +51,7 @@ export interface AnamnesisRunMeta {
 
 export interface AnamnesisOutput {
   profile: AnamnesisProfile;
+  report: import("@/lib/sample-data/anamnesis-report").AnamnesisReport;
   _meta: AnamnesisRunMeta;
 }
 
