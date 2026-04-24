@@ -13,6 +13,7 @@ out/
 dist/
 build/
 *.tsbuildinfo
+next-env.d.ts
 
 # ---------------------------------------------------------------------------
 # Secrets (CRITICAL — never commit)
@@ -77,4 +78,9 @@ supabase/logs/
 # but content is maintainer-internal, not public)
 # ---------------------------------------------------------------------------
 CLAUDE.md
+
+# ---------------------------------------------------------------------------
+# Claude Code local settings (plugin config, scheduled tasks, etc.)
+# ---------------------------------------------------------------------------
+.claude/
 
