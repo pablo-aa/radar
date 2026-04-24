@@ -1,0 +1,42 @@
+name: Scout (indexer)
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_cost_usd:
+        description: "Cost cap for this run (USD)"
+        required: false
+        default: "2"
+  # Weekly Monday 7am BRT (10am UTC). Uncomment to enable cron.
+  # schedule:
+  #   - cron: "0 10 * * 1"
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # The Scout modules import "server-only", which throws when imported
+      # outside a Next.js server context. In a CI tsx run we stub it to a
+      # no-op so the imports load. Safe because this env has no client code.
+      - name: Stub server-only guard for CI runtime
+        run: echo 'module.exports = {};' > node_modules/server-only/index.js
+
+      - name: Run Scout
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SCOUT_AGENT_ID: ${{ secrets.SCOUT_AGENT_ID }}
+          SCOUT_ENVIRONMENT_ID: ${{ secrets.SCOUT_ENVIRONMENT_ID }}
+          MAX_COST_USD: ${{ github.event.inputs.max_cost_usd }}
+        run: npx tsx scripts/scout/trigger-run.ts

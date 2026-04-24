@@ -21,7 +21,9 @@ import type { ScoutSource } from "@/lib/agents/scout/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-export const maxDuration = 900;
+// Vercel Hobby caps serverless functions at 300 seconds. Long Scout runs
+// live in GitHub Actions (see .github/workflows/scout.yml).
+export const maxDuration = 300;
 
 type ScoutBody = {
   force?: boolean;
