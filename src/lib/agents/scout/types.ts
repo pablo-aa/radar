@@ -11,36 +11,6 @@ export interface ScoutSource {
   expected_loc: string;
 }
 
-export interface ScoutInput {
-  sources: ScoutSource[];
-  scout_run_id: string;
-}
-
-export interface ScoutUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_input_tokens: number;
-  cache_creation_input_tokens: number;
-}
-
-export interface ScoutMeta {
-  model: string;
-  usage: ScoutUsage;
-  cost_usd: number;
-  started_at: string;
-  finished_at: string;
-  iterations: number;
-  scope_rejections: number;
-}
-
-export interface ScoutOutput {
-  run_summary: string;
-  visited: number;
-  upserted: number;
-  discarded: number;
-  _meta: ScoutMeta;
-}
-
 // ---------------------------------------------------------------------------
 // Tool input schemas (narrow types for tool executors)
 // ---------------------------------------------------------------------------
@@ -109,3 +79,56 @@ export type UpsertOpportunityResult =
 export type MarkDiscardedResult =
   | { ok: true }
   | { ok: false; error: "db_error"; detail?: string };
+
+// ---------------------------------------------------------------------------
+// Run metadata and output
+// ---------------------------------------------------------------------------
+
+export interface ScoutRunMeta {
+  model: string;
+  usage: ScoutUsage;
+  cost_usd: number;
+  session_id: string;
+  started_at: string;
+  finished_at: string;
+  fetches: number;
+  upserts: number;
+  discards: number;
+  iterations: number;
+}
+
+export interface ScoutUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+export interface ScoutOutput {
+  run_summary: string;
+  visited: number;
+  upserted: number;
+  discarded: number;
+  _meta: ScoutRunMeta;
+}
+
+// ---------------------------------------------------------------------------
+// Session handle
+// ---------------------------------------------------------------------------
+
+export interface ScoutDrainOptions {
+  abortSignal?: AbortSignal;
+  onUpsert?: (opportunityId: string, action: "inserted" | "updated") => void;
+  maxCostUsd?: number;
+}
+
+export interface ScoutDrainResult {
+  output: ScoutOutput;
+  meta: ScoutRunMeta;
+  session_id: string;
+}
+
+export interface ScoutSessionHandle {
+  session_id: string;
+  drain(options?: ScoutDrainOptions): Promise<ScoutDrainResult>;
+}

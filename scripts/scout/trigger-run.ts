@@ -1,22 +1,19 @@
 #!/usr/bin/env tsx
-// One-shot CLI to run the Scout agent against PILOT_SOURCES. Bypasses the
-// HTTP route so the maintainer can trigger from the terminal without a
-// running dev server. This is a paid operation (~$1-5 per run).
+// CLI trigger for the Scout Managed Agent run. Bypasses the HTTP route so
+// the maintainer can run from terminal. This is a paid operation (~$0.80-$1.50
+// for 5 sources).
 //
 // Usage:
 //   npx tsx scripts/scout/trigger-run.ts
-//
-// Cost cap default: $5 USD. Override with MAX_COST_USD env var.
+//   MAX_COST_USD=2 npx tsx scripts/scout/trigger-run.ts
 
 import { config as loadDotenv } from "dotenv";
 loadDotenv({ path: ".env.local" });
 loadDotenv();
 
 import { createClient } from "@supabase/supabase-js";
-
-// Import using relative paths (scripts/ is excluded from tsconfig paths).
-import { runScout } from "../../src/lib/agents/scout/run";
-import { PILOT_SOURCES } from "../../src/lib/agents/scout/sources";
+import { createScoutSession } from "../../src/lib/agents/scout/run-agent";
+import { SCOUT_PILOT_SOURCES } from "../../src/lib/agents/scout/sources-pilot";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -30,16 +27,27 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
+if (!process.env.SCOUT_AGENT_ID || !process.env.SCOUT_ENVIRONMENT_ID) {
+  console.error(
+    "Missing SCOUT_AGENT_ID or SCOUT_ENVIRONMENT_ID.\n" +
+      "Run: npm run scout:setup\n" +
+      "Then paste the output into .env.local and re-run.",
+  );
+  process.exit(1);
+}
+
 const maxCostUsd = process.env.MAX_COST_USD
   ? parseFloat(process.env.MAX_COST_USD)
-  : 5.0;
+  : 2.0;
 
 const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-async function main() {
-  console.log(`Scout pilot run: ${PILOT_SOURCES.length} sources, cost cap $${maxCostUsd}`);
+async function main(): Promise<void> {
+  console.log(
+    `Scout pilot run: ${SCOUT_PILOT_SOURCES.length} sources, cost cap $${maxCostUsd}`,
+  );
 
   const nowIso = new Date().toISOString();
   const runInsert = await admin
@@ -48,7 +56,7 @@ async function main() {
       started_at: nowIso,
       finished_at: null,
       status: "running",
-      sources_count: PILOT_SOURCES.length,
+      sources_count: SCOUT_PILOT_SOURCES.length,
       pages_fetched: 0,
       found_count: 0,
       updated_count: 0,
@@ -66,10 +74,29 @@ async function main() {
 
   const runId: string = runInsert.data.id;
   console.log(`run_id: ${runId}`);
-  console.log("Running Scout agent (this takes up to 15 minutes)...\n");
+
+  // Expose the run id so the drain executor can inject it into tool calls.
+  process.env.SCOUT_RUN_ID = runId;
+
+  console.log("Creating Scout session...");
+  const handle = await createScoutSession(SCOUT_PILOT_SOURCES);
+  console.log(`session_id: ${handle.session_id}`);
+
+  // Update the scout_runs row with the session_id before draining.
+  await admin
+    .from("scout_runs")
+    .update({ agent_session_id: handle.session_id })
+    .eq("id", runId);
+
+  console.log("Draining Scout session (up to 15 minutes)...\n");
 
   try {
-    const result = await runScout(PILOT_SOURCES, runId, { maxCostUsd });
+    const { output, meta } = await handle.drain({
+      maxCostUsd,
+      onUpsert: (opportunityId, action) => {
+        console.log(`  upsert [${action}]: ${opportunityId}`);
+      },
+    });
 
     const finishedAt = new Date().toISOString();
 
@@ -78,25 +105,27 @@ async function main() {
       .update({
         status: "done",
         finished_at: finishedAt,
-        sources_count: PILOT_SOURCES.length,
-        pages_fetched: result._meta.iterations,
-        found_count: result.upserted,
+        sources_count: SCOUT_PILOT_SOURCES.length,
+        pages_fetched: meta.fetches,
+        found_count: meta.upserts,
         updated_count: 0,
-        discarded_count: result.discarded,
-        output: result._meta as unknown as Record<string, unknown>,
+        discarded_count: meta.discards,
+        output: meta as unknown as Record<string, unknown>,
       })
       .eq("id", runId);
 
     console.log("\n--- Scout run complete ---");
     console.log(`run_id:        ${runId}`);
-    console.log(`visited:       ${result.visited}`);
-    console.log(`upserted:      ${result.upserted}`);
-    console.log(`discarded:     ${result.discarded}`);
-    console.log(`iterations:    ${result._meta.iterations}`);
-    console.log(`input_tokens:  ${result._meta.usage.input_tokens}`);
-    console.log(`output_tokens: ${result._meta.usage.output_tokens}`);
-    console.log(`cost_usd:      $${result._meta.cost_usd.toFixed(4)}`);
-    console.log(`\nrun_summary: ${result.run_summary}`);
+    console.log(`session_id:    ${meta.session_id}`);
+    console.log(`visited:       ${output.visited}`);
+    console.log(`upserted:      ${output.upserted}`);
+    console.log(`discarded:     ${output.discarded}`);
+    console.log(`fetches:       ${meta.fetches}`);
+    console.log(`iterations:    ${meta.iterations}`);
+    console.log(`input_tokens:  ${meta.usage.input_tokens}`);
+    console.log(`output_tokens: ${meta.usage.output_tokens}`);
+    console.log(`cost_usd:      $${meta.cost_usd.toFixed(4)}`);
+    console.log(`\nrun_summary: ${output.run_summary}`);
 
     // Fetch top 5 upserted titles for quick review.
     const oppsRead = await admin
@@ -109,7 +138,9 @@ async function main() {
     if (!oppsRead.error && oppsRead.data && oppsRead.data.length > 0) {
       console.log("\nTop upserted opportunities:");
       for (const opp of oppsRead.data) {
-        console.log(`  [${opp.opportunity_type ?? "?"}] ${opp.title} (${opp.status ?? "?"})`);
+        console.log(
+          `  [${opp.opportunity_type ?? "?"}] ${opp.title} (${opp.status ?? "?"})`,
+        );
       }
     }
   } catch (err: unknown) {

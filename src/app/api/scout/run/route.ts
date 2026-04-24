@@ -1,9 +1,9 @@
 // POST /api/scout/run
 //
 // Triggers the Scout agent for the authenticated admin. Scout crawls the
-// provided sources (or PILOT_SOURCES if none given), persists opportunities
-// and discarded rows directly via tool executors, then updates the
-// scout_runs row with summary stats.
+// provided sources (or SCOUT_PILOT_SOURCES if none given), persists
+// opportunities and discarded rows directly via tool executors, then updates
+// the scout_runs row with summary stats.
 //
 // Auth: admin-only (Scout is maintainer-triggered, not user-triggered).
 // Running guard: reject if a scout_run with status="running" exists in the
@@ -13,13 +13,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminProfile } from "@/lib/admin";
-import { runScout } from "@/lib/agents/scout/run";
-import { PILOT_SOURCES } from "@/lib/agents/scout/sources";
+import { createScoutSession } from "@/lib/agents/scout/run-agent";
+import { SCOUT_PILOT_SOURCES } from "@/lib/agents/scout/sources-pilot";
 import type { Profile, ScoutRunUpdate } from "@/lib/supabase/types";
 import type { ScoutSource } from "@/lib/agents/scout/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 export const maxDuration = 900;
 
 type ScoutBody = {
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const sources: ScoutSource[] =
-    body.sources && body.sources.length > 0 ? body.sources : PILOT_SOURCES;
+    body.sources && body.sources.length > 0 ? body.sources : SCOUT_PILOT_SOURCES;
 
   // Running guard: reject if a running row exists in the last 10 minutes.
   if (!body.force) {
@@ -139,8 +140,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const scoutRunId: string = runInsert.data.id;
 
+  // Expose the run id so the drain executor can inject it into tool calls.
+  process.env.SCOUT_RUN_ID = scoutRunId;
+
   try {
-    const result = await runScout(sources, scoutRunId, {
+    const handle = await createScoutSession(sources);
+
+    // Record the session_id on the run row before draining.
+    await admin
+      .from("scout_runs")
+      .update({ agent_session_id: handle.session_id })
+      .eq("id", scoutRunId);
+
+    const { output, meta } = await handle.drain({
       maxCostUsd: body.max_cost_usd,
     });
 
@@ -150,32 +162,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       status: "done",
       finished_at: finishedAt,
       sources_count: sources.length,
-      pages_fetched: result._meta.iterations,
-      found_count: result.upserted,
+      pages_fetched: meta.fetches,
+      found_count: meta.upserts,
       updated_count: 0,
-      discarded_count: result.discarded,
-      output: result._meta as unknown as Record<string, unknown>,
+      discarded_count: meta.discards,
+      output: meta as unknown as Record<string, unknown>,
     };
 
     await admin.from("scout_runs").update(update).eq("id", scoutRunId);
 
     console.log("[api/scout/run]", {
       run_id: scoutRunId,
-      visited: result.visited,
-      upserted: result.upserted,
-      discarded: result.discarded,
-      input_tokens: result._meta.usage.input_tokens,
-      output_tokens: result._meta.usage.output_tokens,
-      cost_usd: result._meta.cost_usd,
+      visited: output.visited,
+      upserted: output.upserted,
+      discarded: output.discarded,
+      input_tokens: meta.usage.input_tokens,
+      output_tokens: meta.usage.output_tokens,
+      cost_usd: meta.cost_usd,
     });
 
     return NextResponse.json({
       run_id: scoutRunId,
-      visited: result.visited,
-      upserted: result.upserted,
-      discarded: result.discarded,
-      cost_usd: result._meta.cost_usd,
-      run_summary: result.run_summary,
+      visited: output.visited,
+      upserted: output.upserted,
+      discarded: output.discarded,
+      cost_usd: meta.cost_usd,
+      run_summary: output.run_summary,
     });
   } catch (err: unknown) {
     const redacted = redactError(err);
