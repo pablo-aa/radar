@@ -311,6 +311,7 @@ async function drainSession(
   let iterations = 0;
   let lastAgentText = "";
   let costCapHit = false;
+  let nudgeCount = 0;
 
   const userText = buildScoutMaUserMessage(sources);
 
@@ -347,9 +348,12 @@ async function drainSession(
       if (isSpanModelRequestEnd(ev)) {
         accumulateUsage(usage, ev);
         iterations++;
+        const currentCost = computeCostUsd(usage);
+        console.log(
+          `[scout] iter=${iterations} progress=${upserts + discards}/${sources.length} upserts=${upserts} discards=${discards} cost=$${currentCost.toFixed(4)}`,
+        );
 
         // Cost cap: if cumulative cost exceeds maxCostUsd, hard-abort the stream.
-        const currentCost = computeCostUsd(usage);
         if (currentCost >= maxCostUsd && !costCapHit) {
           costCapHit = true;
           console.log(`[scout] cost cap $${maxCostUsd.toFixed(2)} hit at $${currentCost.toFixed(4)}, hard-aborting session`);
@@ -367,11 +371,16 @@ async function drainSession(
             const r = result as { ok: boolean; id?: string; action?: "inserted" | "updated" };
             if (r.ok) {
               upserts++;
+              const title = typeof parsed === "object" && parsed && "title" in parsed && typeof (parsed as { title: unknown }).title === "string" ? (parsed as { title: string }).title.slice(0, 60) : "(untitled)";
+              console.log(`[scout] upsert #${upserts} [${r.action}] ${title}`);
               if (r.id && r.action) {
                 options?.onUpsert?.(r.id, r.action);
               }
+            } else {
+              console.warn(`[scout] upsert failed:`, result);
             }
           } else {
+            console.warn(`[scout] upsert_opportunity received invalid input:`, JSON.stringify(ev.input).slice(0, 200));
             result = { ok: false, error: "invalid_input", detail: "invalid upsert_opportunity input" };
           }
 
@@ -392,8 +401,16 @@ async function drainSession(
             const enriched: Record<string, unknown> = { ...parsed, scout_run_id: scoutRunId };
             result = await executeMarkDiscarded(enriched);
             const r = result as { ok: boolean };
-            if (r.ok) discards++;
+            if (r.ok) {
+              discards++;
+              const host = typeof parsed === "object" && parsed && "host" in parsed && typeof (parsed as { host: unknown }).host === "string" ? (parsed as { host: string }).host : "?";
+              const reason = typeof parsed === "object" && parsed && "reason" in parsed && typeof (parsed as { reason: unknown }).reason === "string" ? (parsed as { reason: string }).reason : "?";
+              console.log(`[scout] discard #${discards} ${host} reason=${reason}`);
+            } else {
+              console.warn(`[scout] discard failed:`, result);
+            }
           } else {
+            console.warn(`[scout] mark_discarded received invalid input:`, JSON.stringify(ev.input).slice(0, 200));
             result = { ok: false, error: "db_error", detail: "invalid mark_discarded input" };
           }
 
@@ -420,6 +437,8 @@ async function drainSession(
           });
         }
       } else if (isAgentMessage(ev)) {
+        const preview = JSON.stringify(ev.content).slice(0, 200);
+        console.log(`[scout] agent.message preview: ${preview}`);
         const text = ev.content
           .filter(
             (b): b is { type: "text"; text: string } =>
@@ -436,6 +455,50 @@ async function drainSession(
       }
 
       if (isTerminal(ev)) {
+        const committed = upserts + discards;
+        const target = sources.length;
+        // If the agent went idle before committing every source, wake it up
+        // with a continuation message. Skip when the cost cap already fired
+        // (the stream is about to abort anyway). Cap at 3 nudges to avoid
+        // infinite loops when the agent refuses to continue.
+        if (
+          ev.type === "session.status_idle" &&
+          committed < target &&
+          nudgeCount < 3 &&
+          !costCapHit
+        ) {
+          nudgeCount++;
+          console.log(
+            `[scout] idle at ${committed}/${target}, nudging (attempt ${nudgeCount}/3)`,
+          );
+          try {
+            await client.beta.sessions.events.send(sessionId, {
+              events: [
+                {
+                  type: "user.message",
+                  content: [
+                    {
+                      type: "text",
+                      text:
+                        `You stopped at ${committed}/${target} sources committed. ` +
+                        `You still need to emit upsert_opportunity or mark_discarded for ${target - committed} more sources. ` +
+                        `Resume processing the remaining sources from the list now. ` +
+                        `Do not write a summary until all ${target} sources are committed.`,
+                    },
+                  ],
+                },
+              ],
+            });
+            continue;
+          } catch (nudgeErr: unknown) {
+            console.warn(
+              `[scout] nudge send failed, treating as terminal:`,
+              nudgeErr instanceof Error ? nudgeErr.message : nudgeErr,
+            );
+            exitReason = "terminal";
+            break;
+          }
+        }
         exitReason = "terminal";
         break;
       }

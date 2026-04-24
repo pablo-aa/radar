@@ -117,8 +117,17 @@ export function buildScoutMaUserMessage(sources: ScoutSource[]): string {
       `${i + 1}. ${s.url}\n   hint: ${s.hint}\n   expected_type: ${s.opportunity_type} | expected_loc: ${s.expected_loc}`,
   );
   return (
-    `Index these ${N} sources. For each, research the opportunity thoroughly, then call upsert_opportunity or mark_discarded.\n\n` +
+    `Index these ${N} sources.\n\n` +
     lines.join("\n\n") +
-    `\n\nYou are receiving ${N} sources. Process each sequentially, calling upsert_opportunity or mark_discarded for each before moving on. Do not stop until you have emitted one of those tool calls for every source. Only then write your one-line summary.`
+    `\n\n===== CRITICAL EXECUTION RULES =====\n` +
+    `You MUST emit exactly ${N} tool calls of either upsert_opportunity or mark_discarded before writing any summary. One per source.\n\n` +
+    `Success criterion: upsert_count + discard_count === ${N}. Anything less means you failed the task.\n\n` +
+    `For each source, the action is NOT OPTIONAL:\n` +
+    `  - If the source is a valid opportunity in scope -> upsert_opportunity\n` +
+    `  - If the source is out of scope, a dead link, or unverifiable after 4 research calls -> mark_discarded with a reason\n` +
+    `  - "I don't want to process this source" is NOT an option. You MUST call one of the two tools.\n\n` +
+    `Do not batch your thinking. Process source 1, commit it, then move to source 2, commit it, etc.\n` +
+    `Do not write a summary until upsert_count + discard_count === ${N}.\n\n` +
+    `You have up to ${Math.max(10, N * 3)} iterations. Use them.`
   );
 }
