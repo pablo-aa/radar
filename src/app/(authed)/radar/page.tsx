@@ -231,88 +231,136 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* 90-day plan above the filter row */}
-      <div className="plan">
-        <h2>Strategist · 90-day plan</h2>
-        <p className="sub">
-          generated {plan.generatedAt} · horizon {plan.horizon}
-        </p>
-        <div className="plan-grid">
-          {plan.tiers.map((tier, i) => (
-            <div key={i} className="plan-col">
-              <h4>
-                <span>{tier.label}</span> · {tier.range}
-              </h4>
-              <ol>
-                {tier.items.map((it, j) => (
-                  <li key={j}>
-                    {it.text}
-                    <span className="meta">
-                      {it.meta}
-                      {it.ok && <span className="ok"> · strategist picks</span>}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          ))}
-        </div>
-        {isAdmin && (
-          <div style={{ marginTop: "1rem" }}>
-            <AdminRerunButton />
-          </div>
-        )}
-      </div>
-
-      <div className="filter-row">
-        <button className="pill on" type="button">
-          All <span className="ct">{opps.length}</span>
-        </button>
-        {CATS.map((c) => {
-          const n = opps.filter((o) => o.category === c.id).length;
-          return (
-            <button key={c.id} className="pill" type="button">
-              {c.label} <span className="ct">{n}</span>
-            </button>
-          );
-        })}
-        <span className="spacer"></span>
-        <span className="sort">Sorted by fit · Strategist weighting</span>
-      </div>
-
-      {/* Overlay during generation states */}
-      <div style={{ position: "relative" }}>
-        {generating && (
+      {generating ? (
+        <div
+          style={{
+            padding: "5rem 1rem",
+            textAlign: "center",
+            borderTop: "1px solid var(--ink-5, rgba(26, 26, 23, 0.12))",
+            borderBottom: "1px solid var(--ink-5, rgba(26, 26, 23, 0.12))",
+            margin: "2rem 0",
+          }}
+        >
           <div
             style={{
-              position: "absolute",
-              inset: 0,
-              zIndex: 10,
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "center",
-              paddingTop: "3rem",
-              pointerEvents: "none",
+              fontFamily: "var(--mono)",
+              fontSize: "11px",
+              color: "var(--ink-3)",
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              marginBottom: "1.5rem",
             }}
           >
-            <div
-              style={{
-                background: "var(--surface-1, #fff)",
-                border: "1px solid var(--border, #e5e7eb)",
-                borderRadius: "8px",
-                padding: ".5rem 1.25rem",
-                fontSize: "13px",
-                color: "var(--ink-2, #6b7280)",
-                pointerEvents: "auto",
-              }}
-            >
-              {strategistState === "running"
-                ? "Strategist is ranking your opportunities…"
-                : "Strategist is starting, ranking your opportunities…"}
-            </div>
+            Strategist · running
           </div>
-        )}
-        <div style={{ opacity: generating ? 0.45 : 1, transition: "opacity .3s" }}>
+          <h2
+            style={{
+              fontFamily: "var(--mono)",
+              fontSize: "28px",
+              fontWeight: 700,
+              lineHeight: 1.2,
+              margin: 0,
+              maxWidth: "640px",
+              marginLeft: "auto",
+              marginRight: "auto",
+            }}
+          >
+            Reading your profile, ranking the catalog.
+            <span
+              style={{
+                display: "inline-block",
+                width: ".45em",
+                height: ".75em",
+                background: "var(--accent)",
+                marginLeft: ".08em",
+                verticalAlign: "-.05em",
+                animation: "blink 1.05s steps(1) infinite",
+              }}
+            ></span>
+          </h2>
+          <p
+            style={{
+              fontFamily: "var(--serif)",
+              fontSize: "16px",
+              color: "var(--ink-2)",
+              marginTop: "1.25rem",
+              maxWidth: "560px",
+              marginLeft: "auto",
+              marginRight: "auto",
+              lineHeight: 1.5,
+            }}
+          >
+            Claude Opus 4.7 is weighing your trajectory against each opportunity
+            in this week&apos;s catalog. One pass. Output is a 90-day plan and a
+            fit score grounded in your work.
+          </p>
+          <p
+            style={{
+              fontFamily: "var(--mono)",
+              fontSize: "11px",
+              color: "var(--ink-3)",
+              marginTop: "2rem",
+            }}
+          >
+            About 2 to 3 minutes. You can close this tab, results persist.
+          </p>
+          {isAdmin && (
+            <div style={{ marginTop: "2rem" }}>
+              <AdminRerunButton />
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* 90-day plan above the filter row */}
+          <div className="plan">
+            <h2>Strategist · 90-day plan</h2>
+            <p className="sub">
+              generated {plan.generatedAt} · horizon {plan.horizon}
+            </p>
+            <div className="plan-grid">
+              {plan.tiers.map((tier, i) => (
+                <div key={i} className="plan-col">
+                  <h4>
+                    <span>{tier.label}</span> · {tier.range}
+                  </h4>
+                  <ol>
+                    {tier.items.map((it, j) => (
+                      <li key={j}>
+                        {it.text}
+                        <span className="meta">
+                          {it.meta}
+                          {it.ok && <span className="ok"> · strategist picks</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ))}
+            </div>
+            {isAdmin && (
+              <div style={{ marginTop: "1rem" }}>
+                <AdminRerunButton />
+              </div>
+            )}
+          </div>
+
+          <div className="filter-row">
+            <button className="pill on" type="button">
+              All <span className="ct">{opps.length}</span>
+            </button>
+            {CATS.map((c) => {
+              const n = opps.filter((o) => o.category === c.id).length;
+              return (
+                <button key={c.id} className="pill" type="button">
+                  {c.label} <span className="ct">{n}</span>
+                </button>
+              );
+            })}
+            <span className="spacer"></span>
+            <span className="sort">Sorted by fit · Strategist weighting</span>
+          </div>
+
           {byCat.map(({ cat, items }) => (
             <div key={cat.id} className="dash-section">
               <div className="category-hd">
@@ -326,17 +374,13 @@ export default async function DashboardPage() {
               </div>
               <div className="grid-3">
                 {items.map((o) => (
-                  <OppCardLink
-                    key={o.id}
-                    o={o}
-                    pick={picksMap.get(o.id)}
-                  />
+                  <OppCardLink key={o.id} o={o} pick={picksMap.get(o.id)} />
                 ))}
               </div>
             </div>
           ))}
-        </div>
-      </div>
+        </>
+      )}
 
       <CornerMeta />
     </div>
