@@ -17,11 +17,14 @@ type WaitlistBody = {
   name: string;
   email: string;
   github_handle: string;
-  why?: string;
+  phone: string;
+  linkedin_url: string;
+  career_moment: string;
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HANDLE_RE = /^[a-zA-Z0-9-]{1,39}$/;
+const URL_RE = /^https?:\/\//;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -54,15 +57,24 @@ function validate(raw: unknown): Validation {
     return { ok: false, reason: "invalid_github_handle" };
   }
 
-  let why: string | undefined;
-  if (raw.why !== undefined && raw.why !== null) {
-    const w = asString(raw.why);
-    if (typeof w !== "string") return { ok: false, reason: "invalid_why" };
-    if (w.length > 500) return { ok: false, reason: "why_too_long" };
-    why = w;
+  const phone = asString(raw.phone)?.trim();
+  if (!phone) return { ok: false, reason: "missing_phone" };
+  if (phone.length < 8 || phone.length > 30) return { ok: false, reason: "invalid_phone" };
+
+  const linkedin_url = asString(raw.linkedin_url)?.trim();
+  if (!linkedin_url) return { ok: false, reason: "missing_linkedin_url" };
+  if (!URL_RE.test(linkedin_url) || linkedin_url.length > 300) {
+    return { ok: false, reason: "invalid_linkedin_url" };
   }
 
-  return { ok: true, body: { name, email, github_handle: handle, why } };
+  const career_moment = asString(raw.career_moment)?.trim();
+  if (!career_moment) return { ok: false, reason: "missing_career_moment" };
+  if (career_moment.length > 1000) return { ok: false, reason: "career_moment_too_long" };
+
+  return {
+    ok: true,
+    body: { name, email, github_handle: handle, phone, linkedin_url, career_moment },
+  };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -92,7 +104,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     name: string;
     email: string;
     github_handle: string;
-    why?: string | null;
+    phone: string;
+    linkedin_url: string;
+    career_moment: string;
   };
   type MinimalAdmin = {
     from(table: "waitlist"): {
@@ -111,7 +125,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     name: v.body.name,
     email: v.body.email,
     github_handle: v.body.github_handle,
-    why: v.body.why ?? null,
+    phone: v.body.phone,
+    linkedin_url: v.body.linkedin_url,
+    career_moment: v.body.career_moment,
   });
 
   if (insert.error) {

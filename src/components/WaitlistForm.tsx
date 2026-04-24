@@ -19,8 +19,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export default function WaitlistForm() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [handle, setHandle] = useState("");
-  const [why, setWhy] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
+  const [careerMoment, setCareerMoment] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [success, setSuccess] = useState<SuccessState | null>(null);
   const [errMsg, setErrMsg] = useState<string>("");
@@ -42,7 +44,9 @@ export default function WaitlistForm() {
           name: name.trim(),
           email: email.trim(),
           github_handle: cleanHandle,
-          why: why.trim() ? why.trim() : undefined,
+          phone: phone.trim(),
+          linkedin_url: linkedinUrl.trim(),
+          career_moment: careerMoment.trim(),
         }),
       });
       const data: unknown = await res.json().catch(() => null);
@@ -54,34 +58,38 @@ export default function WaitlistForm() {
       }
 
       if (res.status === 409) {
-        setErrMsg(`@${cleanHandle} is already on the list. Sit tight.`);
+        setErrMsg(`@${cleanHandle} já está na lista. Aguarde seu convite.`);
         setStatus("error");
         return;
       }
 
       if (res.status === 400 && isRecord(data) && typeof data.error === "string") {
         const map: Record<string, string> = {
-          invalid_json: "Could not parse the form. Try again.",
-          invalid_body: "Could not parse the form. Try again.",
-          missing_name: "Please enter your name.",
-          name_too_long: "Name is too long.",
-          missing_email: "Please enter your email.",
-          email_too_long: "Email is too long.",
-          invalid_email: "That email does not look right.",
-          missing_github_handle: "Please enter your GitHub handle.",
-          invalid_github_handle: "That GitHub handle does not look right.",
-          invalid_why: "Could not read the optional field. Try again.",
-          why_too_long: "The optional field is too long. Trim it under 500 chars.",
+          invalid_json: "Não foi possível ler o formulário. Tente de novo.",
+          invalid_body: "Não foi possível ler o formulário. Tente de novo.",
+          missing_name: "Informe seu nome.",
+          name_too_long: "Nome muito longo.",
+          missing_email: "Informe seu email.",
+          email_too_long: "Email muito longo.",
+          invalid_email: "Email parece inválido.",
+          missing_github_handle: "Informe seu GitHub handle.",
+          invalid_github_handle: "GitHub handle parece inválido.",
+          missing_phone: "Informe seu celular.",
+          invalid_phone: "Celular inválido.",
+          missing_linkedin_url: "Informe seu LinkedIn ou portfólio.",
+          invalid_linkedin_url: "Link inválido. Use https.",
+          missing_career_moment: "Conte seu momento na carreira.",
+          career_moment_too_long: "Momento muito longo. Encurte abaixo de 1000 caracteres.",
         };
-        setErrMsg(map[data.error] ?? "Something went wrong. Try again.");
+        setErrMsg(map[data.error] ?? "Algo deu errado. Tente de novo.");
         setStatus("error");
         return;
       }
 
-      setErrMsg("Server error. Try again in a moment.");
+      setErrMsg("Erro no servidor. Tente de novo em um minuto.");
       setStatus("error");
     } catch {
-      setErrMsg("Network error. Check your connection and retry.");
+      setErrMsg("Erro de rede. Confira sua conexão e tente de novo.");
       setStatus("error");
     }
   };
@@ -91,11 +99,11 @@ export default function WaitlistForm() {
       <div className="waitlist-success">
         <div className="waitlist-success-kicker">§ on the list</div>
         <p className="waitlist-success-body">
-          Thanks {success.name}, you are on the list.
-          We will reach out at <strong>{success.email}</strong>.
+          Obrigado {success.name}, você está na lista.
+          Avisamos em <strong>{success.email}</strong> quando abrir seu convite.
         </p>
         <p className="waitlist-success-fine">
-          Open source, AGPL-3.0. Invite-only during beta.
+          Open source, AGPL-3.0. Convite único durante o beta.
         </p>
       </div>
     );
@@ -106,7 +114,7 @@ export default function WaitlistForm() {
   return (
     <form className="waitlist-form" onSubmit={submit} noValidate>
       <label className="waitlist-label">
-        <span className="waitlist-label-k">Name</span>
+        <span className="waitlist-label-k">Nome</span>
         <input
           className="field"
           type="text"
@@ -136,6 +144,22 @@ export default function WaitlistForm() {
       </label>
 
       <label className="waitlist-label">
+        <span className="waitlist-label-k">Celular</span>
+        <input
+          className="field"
+          type="tel"
+          name="phone"
+          autoComplete="tel"
+          required
+          maxLength={30}
+          placeholder="+55 11 99999-9999"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          disabled={submitting}
+        />
+      </label>
+
+      <label className="waitlist-label">
         <span className="waitlist-label-k">GitHub handle</span>
         <input
           className="field"
@@ -151,17 +175,31 @@ export default function WaitlistForm() {
       </label>
 
       <label className="waitlist-label">
-        <span className="waitlist-label-k">
-          Why radar <span className="waitlist-label-opt">· optional</span>
-        </span>
+        <span className="waitlist-label-k">LinkedIn ou portfólio</span>
+        <input
+          className="field"
+          type="url"
+          name="linkedin_url"
+          required
+          maxLength={300}
+          placeholder="https://linkedin.com/in/seu-perfil"
+          value={linkedinUrl}
+          onChange={(e) => setLinkedinUrl(e.target.value)}
+          disabled={submitting}
+        />
+      </label>
+
+      <label className="waitlist-label">
+        <span className="waitlist-label-k">Seu momento na carreira</span>
         <textarea
           className="field"
-          name="why"
-          rows={3}
-          maxLength={500}
-          placeholder="One sentence is plenty."
-          value={why}
-          onChange={(e) => setWhy(e.target.value)}
+          name="career_moment"
+          required
+          rows={4}
+          maxLength={1000}
+          placeholder="Onde você está agora e o que está buscando."
+          value={careerMoment}
+          onChange={(e) => setCareerMoment(e.target.value)}
           disabled={submitting}
         />
       </label>
@@ -186,7 +224,7 @@ export default function WaitlistForm() {
           {submitting ? "oining..." : "oin waitlist"}
         </button>
         <span className="waitlist-fine">
-          We do not spam. We use your email only to invite you in.
+          Sem spam. Seu email entra em contato só para convidar.
         </span>
       </div>
     </form>
