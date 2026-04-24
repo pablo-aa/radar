@@ -178,24 +178,20 @@ async function drainSession(
           };
           const index = buffer.push(card);
           options?.onCard?.(card, index);
-          try {
-            await client.beta.sessions.events.send(sessionId, {
-              events: [
-                {
-                  type: "user.custom_tool_result",
-                  custom_tool_use_id: ev.id,
-                  content: [
-                    {
-                      type: "text",
-                      text: JSON.stringify({ ok: true, card_index: index }),
-                    },
-                  ],
-                },
-              ],
-            });
-          } catch (err: unknown) {
-            throw err;
-          }
+          await client.beta.sessions.events.send(sessionId, {
+            events: [
+              {
+                type: "user.custom_tool_result",
+                custom_tool_use_id: ev.id,
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({ ok: true, card_index: index }),
+                  },
+                ],
+              },
+            ],
+          });
         } else {
           await client.beta.sessions.events.send(sessionId, {
             events: [
