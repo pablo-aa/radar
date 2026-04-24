@@ -1,23 +1,29 @@
 #!/usr/bin/env tsx
 // CLI trigger for the Scout Managed Agent run. Bypasses the HTTP route so
-// the maintainer can run from terminal. This is a paid operation (~$0.80-$1.50
-// for 5 sources).
+// the maintainer can run from terminal. This is a paid operation.
 //
 // Usage:
 //   npx tsx scripts/scout/trigger-run.ts
-//   MAX_COST_USD=2 npx tsx scripts/scout/trigger-run.ts
+//   MAX_COST_USD=10 npx tsx scripts/scout/trigger-run.ts
+//   QUEUE_SIZE=50 MAX_SOURCES_PER_RUN=100 npx tsx scripts/scout/trigger-run.ts
 
 import { config as loadDotenv } from "dotenv";
 loadDotenv({ path: ".env.local" });
 loadDotenv();
 
 import { createClient } from "@supabase/supabase-js";
-import { runScoutBatched } from "../../src/lib/agents/scout/run-agent";
+import { runScoutPerSource } from "../../src/lib/agents/scout/run-agent";
 import { SCOUT_PILOT_SOURCES } from "../../src/lib/agents/scout/sources-pilot";
+import { expandSourcesViaSitemap } from "../../src/lib/agents/scout/sitemap";
+import type { ScoutSource } from "../../src/lib/agents/scout/types";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+// ---------------------------------------------------------------------------
+// Env validation
+// ---------------------------------------------------------------------------
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!url || !serviceKey) {
+if (!supabaseUrl || !serviceKey) {
   console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
   process.exit(1);
 }
@@ -30,30 +36,45 @@ if (!process.env.ANTHROPIC_API_KEY) {
 if (!process.env.SCOUT_AGENT_ID || !process.env.SCOUT_ENVIRONMENT_ID) {
   console.error(
     "Missing SCOUT_AGENT_ID or SCOUT_ENVIRONMENT_ID.\n" +
-      "Run: npm run scout:setup\n" +
+      "Run: npx tsx scripts/scout/create-resources.ts --force\n" +
       "Then paste the output into .env.local and re-run.",
   );
   process.exit(1);
 }
 
-const maxCostUsd = process.env.MAX_COST_USD
-  ? parseFloat(process.env.MAX_COST_USD)
-  : 2.0;
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
 
-const batchSize = process.env.BATCH_SIZE
-  ? parseInt(process.env.BATCH_SIZE, 10)
-  : 10;
+const maxCostUsd = process.env.MAX_COST_USD ? parseFloat(process.env.MAX_COST_USD) : 10.0;
+const queueSize = process.env.QUEUE_SIZE ? parseInt(process.env.QUEUE_SIZE, 10) : 50;
+const maxSourcesPerRun = process.env.MAX_SOURCES_PER_RUN
+  ? parseInt(process.env.MAX_SOURCES_PER_RUN, 10)
+  : 100;
 
-const admin = createClient(url, serviceKey, {
+const admin = createClient(supabaseUrl, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-async function main(): Promise<void> {
-  const totalBatches = Math.ceil(SCOUT_PILOT_SOURCES.length / batchSize);
-  console.log(
-    `Scout pilot run: ${SCOUT_PILOT_SOURCES.length} sources, batch size ${batchSize} (${totalBatches} batches), cost cap $${maxCostUsd}`,
-  );
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
+function dedupeByUrl(sources: ScoutSource[]): ScoutSource[] {
+  const seen = new Set<string>();
+  return sources.filter((s) => {
+    if (seen.has(s.url)) return false;
+    seen.add(s.url);
+    return true;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  // 1. Insert scout_runs row as placeholder (sources_count updated after seed build)
   const nowIso = new Date().toISOString();
   const runInsert = await admin
     .from("scout_runs")
@@ -61,7 +82,7 @@ async function main(): Promise<void> {
       started_at: nowIso,
       finished_at: null,
       status: "running",
-      sources_count: SCOUT_PILOT_SOURCES.length,
+      sources_count: 0,
       pages_fetched: 0,
       found_count: 0,
       updated_count: 0,
@@ -79,31 +100,83 @@ async function main(): Promise<void> {
 
   const runId: string = runInsert.data.id;
   console.log(`run_id: ${runId}`);
-  console.log("Starting batched Scout run...\n");
+
+  // 2. Load pilot sources (manual seeds)
+  const pilotSources: ScoutSource[] = SCOUT_PILOT_SOURCES;
+
+  // 3. Load queued sources (pending, ordered by priority)
+  const queueRead = await admin
+    .from("scout_queue")
+    .select("url, hint, opportunity_type, status")
+    .eq("status", "pending")
+    .order("priority_score", { ascending: false })
+    .order("discovered_at", { ascending: true })
+    .limit(queueSize);
+
+  const queuedSources: ScoutSource[] = (queueRead.data ?? []).map((row) => ({
+    url: row.url,
+    hint: row.hint,
+    opportunity_type: (row.opportunity_type ?? "grant") as ScoutSource["opportunity_type"],
+    expected_loc: "global",
+  }));
+
+  // 4. Combine pilot + queue, dedup by URL
+  const combined = dedupeByUrl([...pilotSources, ...queuedSources]);
+  console.log(
+    `[scout] seeds: ${pilotSources.length} manual + ${queuedSources.length} queued = ${combined.length} combined (before sitemap expansion)`,
+  );
+
+  // 5. Expand via sitemap
+  console.log("[scout] pre-fetching sitemaps (this may take 30-60s for large seed sets)...");
+  const expanded = await expandSourcesViaSitemap(combined);
+  const derivedCount = expanded.length - combined.length;
+  console.log(
+    `[scout] sitemap expansion: +${derivedCount} derived = ${expanded.length} total`,
+  );
+
+  // 6. Cap at MAX_SOURCES_PER_RUN, convert to ScoutSource[]
+  const finalSources: ScoutSource[] = expanded.slice(0, maxSourcesPerRun).map((d) => ({
+    url: d.url,
+    hint: d.hint,
+    opportunity_type: d.opportunity_type as ScoutSource["opportunity_type"],
+    expected_loc: "global",
+  }));
+
+  console.log(
+    `[scout] seeds: ${pilotSources.length} manual + ${queuedSources.length} queued + ${derivedCount} from sitemaps = ${finalSources.length} (capped at ${maxSourcesPerRun}), cost cap $${maxCostUsd}`,
+  );
+
+  // 7. Update scout_runs with actual sources_count
+  await admin
+    .from("scout_runs")
+    .update({ sources_count: finalSources.length })
+    .eq("id", runId);
+
+  // Track which source URLs were processed so we can mark them visited in the queue
+  const processedUrls: string[] = [];
 
   try {
-    const { output, meta } = await runScoutBatched(
-      SCOUT_PILOT_SOURCES,
-      runId,
-      {
-        batchSize,
-        maxCostUsd,
-        onBatchComplete: (info) => {
-          console.log(
-            `[scout] batch ${info.batchIndex + 1}/${info.totalBatches} done: ${info.sourcesInBatch} sources, ${info.upsertsInBatch} upserts, ${info.discardsInBatch} discards, $${info.costUsdInBatch.toFixed(2)} (cumulative $${info.cumulativeCostUsd.toFixed(2)})`,
-          );
-        },
+    const output = await runScoutPerSource(finalSources, runId, {
+      maxCostUsd,
+      onSourceComplete: (info) => {
+        const errTag = info.error ? ` ERROR: ${info.error}` : "";
+        console.log(
+          `[scout] source ${info.sourceIndex + 1}/${info.totalSources} done: ${info.url} | upserts=${info.upsertsFromSource} suggestions=${info.suggestionsFromSource} cost=$${info.costUsdFromSource.toFixed(4)} (cumulative $${info.cumulativeCostUsd.toFixed(4)})${errTag}`,
+        );
+        processedUrls.push(info.url);
       },
-    );
+    });
 
+    const meta = output._meta;
     const finishedAt = new Date().toISOString();
 
+    // 8. UPDATE scout_runs with final counts
     await admin
       .from("scout_runs")
       .update({
         status: "done",
         finished_at: finishedAt,
-        sources_count: SCOUT_PILOT_SOURCES.length,
+        sources_count: finalSources.length,
         pages_fetched: meta.fetches,
         found_count: meta.upserts,
         updated_count: 0,
@@ -113,27 +186,43 @@ async function main(): Promise<void> {
       })
       .eq("id", runId);
 
+    // 9. Mark processed queue entries as visited
+    if (processedUrls.length > 0) {
+      const visitedAt = new Date().toISOString();
+      await admin
+        .from("scout_queue")
+        .update({
+          status: "visited",
+          last_visited_at: visitedAt,
+          visit_count: 1,
+        })
+        .in("url", processedUrls)
+        .eq("status", "pending");
+      console.log(`[scout] marked ${processedUrls.length} queue entries as visited`);
+    }
+
+    // 10. Print final stats
     console.log("\n--- Scout run complete ---");
-    console.log(`run_id:        ${runId}`);
-    console.log(`session_id:    ${meta.session_id} (first batch)`);
-    console.log(`batches:       ${meta.batches ?? 1}`);
-    console.log(`visited:       ${output.visited}`);
-    console.log(`upserted:      ${output.upserted}`);
-    console.log(`discarded:     ${output.discarded}`);
-    console.log(`fetches:       ${meta.fetches}`);
-    console.log(`iterations:    ${meta.iterations}`);
-    console.log(`input_tokens:  ${meta.usage.input_tokens}`);
-    console.log(`output_tokens: ${meta.usage.output_tokens}`);
-    console.log(`cost_usd:      $${meta.cost_usd.toFixed(4)}`);
-    if (meta.batch_errors && meta.batch_errors.length > 0) {
-      console.log(`batch_errors:  ${meta.batch_errors.length}`);
-      for (const be of meta.batch_errors) {
-        console.log(`  batch ${be.batch_index}: ${be.message}`);
+    console.log(`run_id:            ${runId}`);
+    console.log(`session_id:        ${meta.session_id} (first source)`);
+    console.log(`sources_processed: ${meta.sources_processed ?? output.visited}`);
+    console.log(`upserted:          ${output.upserted}`);
+    console.log(`discarded:         ${output.discarded}`);
+    console.log(`suggestions:       ${meta.suggestions ?? 0}`);
+    console.log(`fetches:           ${meta.fetches}`);
+    console.log(`iterations:        ${meta.iterations}`);
+    console.log(`input_tokens:      ${meta.usage.input_tokens}`);
+    console.log(`output_tokens:     ${meta.usage.output_tokens}`);
+    console.log(`cost_usd:          $${meta.cost_usd.toFixed(4)}`);
+    if (meta.source_errors && meta.source_errors.length > 0) {
+      console.log(`source_errors:     ${meta.source_errors.length}`);
+      for (const se of meta.source_errors) {
+        console.log(`  source ${se.source_index} (${se.url}): ${se.message}`);
       }
     }
     console.log(`\nrun_summary: ${output.run_summary}`);
 
-    // Fetch top 5 upserted titles for quick review.
+    // Fetch top 5 upserted titles for quick review
     const oppsRead = await admin
       .from("opportunities")
       .select("title, opportunity_type, status")

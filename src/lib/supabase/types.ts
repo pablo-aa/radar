@@ -273,6 +273,12 @@ export type Database = {
         Update: ScoutDiscardedUpdate;
         Relationships: [];
       };
+      scout_queue: {
+        Row: ScoutQueueRow;
+        Insert: ScoutQueueInsert;
+        Update: ScoutQueueUpdate;
+        Relationships: [];
+      };
       anamnesis_runs: {
         Row: AnamnesisRun;
         Insert: AnamnesisRunInsert;
@@ -295,6 +301,37 @@ export type Database = {
     CompositeTypes: { [key: string]: never };
   };
 };
+
+// scout_queue row
+export type ScoutQueueStatus = "pending" | "visited" | "skipped" | "failed";
+
+export type ScoutQueueRow = {
+  url: string;
+  hint: string;
+  opportunity_type: string | null;
+  discovered_from: string | null;
+  discovered_at: string;
+  visit_count: number;
+  last_visited_at: string | null;
+  citation_count: number;
+  priority_score: number;
+  status: ScoutQueueStatus;
+};
+
+export type ScoutQueueInsert = {
+  url: string;
+  hint: string;
+  opportunity_type?: string | null;
+  discovered_from?: string | null;
+  discovered_at?: string;
+  visit_count?: number;
+  last_visited_at?: string | null;
+  citation_count?: number;
+  priority_score?: number;
+  status?: ScoutQueueStatus;
+};
+
+export type ScoutQueueUpdate = Partial<ScoutQueueInsert>;
 
 export const DEFAULT_ONBOARD_STATE: OnboardState = {
   signed_in: false,

@@ -10,6 +10,7 @@ import type {
   MarkDiscardedResult,
   UpsertOpportunityResult,
 } from "./types";
+import type { SuggestSourceInput } from "./tool-spec";
 import type { OpportunityCategory, OpportunityType } from "@/lib/supabase/types";
 
 // ---------------------------------------------------------------------------
@@ -345,6 +346,75 @@ export async function executeUpsertOpportunity(
     return { ok: false, error: "db_error", detail: insert.error.message };
   }
   return { ok: true, id: insert.data.id, action: "inserted" };
+}
+
+// ---------------------------------------------------------------------------
+// suggest_source executor
+// ---------------------------------------------------------------------------
+
+export interface SuggestSourceResult {
+  ok: boolean;
+  url?: string;
+  action?: "inserted" | "updated";
+  error?: string;
+}
+
+const URL_PROTOCOL_RE = /^https?:\/\/.+/;
+
+export async function executeSuggestSource(
+  input: SuggestSourceInput,
+  scoutRunId: string,
+): Promise<SuggestSourceResult> {
+  if (!URL_PROTOCOL_RE.test(input.url)) {
+    return { ok: false, error: "invalid_url" };
+  }
+
+  const admin = createAdminClient();
+
+  // Check if already exists to determine action label
+  const existing = await admin
+    .from("scout_queue")
+    .select("url, visit_count, citation_count")
+    .eq("url", input.url)
+    .maybeSingle();
+
+  if (existing.error) {
+    return { ok: false, error: "db_error" };
+  }
+
+  if (existing.data) {
+    // UPDATE: increment citation_count, recalculate priority_score
+    const newCitation = existing.data.citation_count + 1;
+    const newPriority = newCitation / (existing.data.visit_count + 1.0);
+    const upd = await admin
+      .from("scout_queue")
+      .update({
+        citation_count: newCitation,
+        priority_score: newPriority,
+      })
+      .eq("url", input.url);
+
+    if (upd.error) {
+      return { ok: false, error: "db_error" };
+    }
+    return { ok: true, url: input.url, action: "updated" };
+  }
+
+  // INSERT
+  const ins = await admin.from("scout_queue").insert({
+    url: input.url,
+    hint: input.hint,
+    opportunity_type: input.opportunity_type,
+    discovered_from: scoutRunId,
+    citation_count: 1,
+    priority_score: 1.0,
+    status: "pending",
+  });
+
+  if (ins.error) {
+    return { ok: false, error: "db_error" };
+  }
+  return { ok: true, url: input.url, action: "inserted" };
 }
 
 // ---------------------------------------------------------------------------

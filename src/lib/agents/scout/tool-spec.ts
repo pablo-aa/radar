@@ -173,13 +173,73 @@ export const markDiscardedToolSpec = {
   },
 } as const;
 
-// Convenience array for agent creation: web_search native tool + 3 custom tools.
+export const suggestSourceToolSpec = {
+  type: "custom" as const,
+  name: "suggest_source" as const,
+  description:
+    "Suggest an adjacent URL for future Scout runs. Use this when you notice a related organization, partner institution, or peer program that was not in the input. Does NOT index the opportunity. Adds the URL to the discovery queue for the next run to visit.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      url: { type: "string", description: "Absolute URL of the adjacent source" },
+      hint: {
+        type: "string",
+        description: "1-2 sentence explanation of what this is and why it is relevant to Brazilian developers",
+      },
+      opportunity_type: {
+        type: "string",
+        enum: [
+          "grant",
+          "fellowship",
+          "scholarship",
+          "accelerator",
+          "arena",
+          "competition",
+          "event",
+          "community",
+          "internship",
+        ],
+      },
+      reason: {
+        type: "string",
+        description:
+          "Short reason for the suggestion (e.g. 'similar to Chevening', 'partner of DAAD', 'mentioned on Fulbright site')",
+      },
+    },
+    required: ["url", "hint", "opportunity_type", "reason"] as string[],
+  },
+} as const;
+
+export interface SuggestSourceInput {
+  url: string;
+  hint: string;
+  opportunity_type: string;
+  reason: string;
+}
+
+export function parseSuggestSourceInput(raw: unknown): SuggestSourceInput | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r["url"] !== "string" || r["url"].length === 0) return null;
+  if (typeof r["hint"] !== "string" || r["hint"].length === 0) return null;
+  if (typeof r["opportunity_type"] !== "string" || r["opportunity_type"].length === 0) return null;
+  if (typeof r["reason"] !== "string" || r["reason"].length === 0) return null;
+  return {
+    url: r["url"],
+    hint: r["hint"],
+    opportunity_type: r["opportunity_type"],
+    reason: r["reason"],
+  };
+}
+
+// Convenience array for agent creation: web_search native tool + 4 custom tools.
 // NOTE: web_search is declared here for reference; the agent creation script
 // passes it inline as a native tool spec (type "web_search_20260209").
 export const SCOUT_CUSTOM_TOOL_SPECS = [
   fetchUrlToolSpec,
   upsertOpportunityToolSpec,
   markDiscardedToolSpec,
+  suggestSourceToolSpec,
 ] as const;
 
 // ---------------------------------------------------------------------------

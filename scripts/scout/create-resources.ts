@@ -2,12 +2,15 @@
 // One-shot setup script: creates the Scout Environment and Agent in the
 // Managed Agents platform. Run once, then paste the printed ids into .env.local.
 //
+// Run this when the system prompt changes (e.g. after a prompt rewrite).
+// Pablo must paste the new agent_id and environment_id into .env.local afterward.
+//
 // Refuses to run if SCOUT_AGENT_ID or SCOUT_ENVIRONMENT_ID is already set
 // (to avoid accidental paid duplicate creation). Pass --force to override.
 //
 // Usage:
-//   npm run scout:setup
-//   npm run scout:setup -- --force
+//   npx tsx scripts/scout/create-resources.ts
+//   npx tsx scripts/scout/create-resources.ts --force
 
 import { config as loadDotenv } from "dotenv";
 import Anthropic from "@anthropic-ai/sdk";
@@ -19,6 +22,7 @@ import { SCOUT_MA_SYSTEM_PROMPT } from "../../src/lib/agents/scout/prompt";
 import {
   upsertOpportunityToolSpec,
   markDiscardedToolSpec,
+  suggestSourceToolSpec,
 } from "../../src/lib/agents/scout/tool-spec";
 
 const force = process.argv.includes("--force");
@@ -89,6 +93,7 @@ async function main(): Promise<void> {
       agentToolset,
       upsertOpportunityToolSpec,
       markDiscardedToolSpec,
+      suggestSourceToolSpec,
     ],
   });
   console.log(`agent_id: ${agent.id}`);
