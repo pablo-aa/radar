@@ -8,6 +8,13 @@
 // Auth: admin-only (Scout is maintainer-triggered, not user-triggered).
 // Running guard: reject if a scout_run with status="running" exists in the
 // last 10 minutes (409).
+//
+// Single-session only: this route intentionally uses one MA session (not the
+// batched path) because the 300s Vercel function window cannot reliably fit
+// multiple sequential batches. For large source lists (> 20 sources), use the
+// GitHub Actions workflow instead (scripts/scout/trigger-run.ts), which has no
+// time cap and uses runScoutBatched. Callers passing more than 20 sources
+// receive a 400 directing them to that path.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -96,6 +103,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const sources: ScoutSource[] =
     body.sources && body.sources.length > 0 ? body.sources : SCOUT_PILOT_SOURCES;
+
+  // Size guard: this route runs a single MA session inside a 300s Vercel
+  // window. More than 20 sources will almost certainly time out. Large runs
+  // belong in the CLI trigger (scripts/scout/trigger-run.ts) which uses
+  // runScoutBatched with no time cap.
+  const ROUTE_MAX_SOURCES = 20;
+  if (sources.length > ROUTE_MAX_SOURCES) {
+    return NextResponse.json(
+      {
+        error: "too_many_sources",
+        detail: `This route accepts at most ${ROUTE_MAX_SOURCES} sources in a single session. For larger runs, trigger via the CLI script (npx tsx scripts/scout/trigger-run.ts) which uses batched execution and has no time cap.`,
+        sources_provided: sources.length,
+      },
+      { status: 400 },
+    );
+  }
 
   // Running guard: reject if a running row exists in the last 10 minutes.
   if (!body.force) {

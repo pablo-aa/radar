@@ -12,7 +12,7 @@ loadDotenv({ path: ".env.local" });
 loadDotenv();
 
 import { createClient } from "@supabase/supabase-js";
-import { createScoutSession } from "../../src/lib/agents/scout/run-agent";
+import { runScoutBatched } from "../../src/lib/agents/scout/run-agent";
 import { SCOUT_PILOT_SOURCES } from "../../src/lib/agents/scout/sources-pilot";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -40,13 +40,18 @@ const maxCostUsd = process.env.MAX_COST_USD
   ? parseFloat(process.env.MAX_COST_USD)
   : 2.0;
 
+const batchSize = process.env.BATCH_SIZE
+  ? parseInt(process.env.BATCH_SIZE, 10)
+  : 10;
+
 const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
 async function main(): Promise<void> {
+  const totalBatches = Math.ceil(SCOUT_PILOT_SOURCES.length / batchSize);
   console.log(
-    `Scout pilot run: ${SCOUT_PILOT_SOURCES.length} sources, cost cap $${maxCostUsd}`,
+    `Scout pilot run: ${SCOUT_PILOT_SOURCES.length} sources, batch size ${batchSize} (${totalBatches} batches), cost cap $${maxCostUsd}`,
   );
 
   const nowIso = new Date().toISOString();
@@ -74,26 +79,22 @@ async function main(): Promise<void> {
 
   const runId: string = runInsert.data.id;
   console.log(`run_id: ${runId}`);
-
-  console.log("Creating Scout session...");
-  const handle = await createScoutSession(SCOUT_PILOT_SOURCES, runId);
-  console.log(`session_id: ${handle.session_id}`);
-
-  // Update the scout_runs row with the session_id before draining.
-  await admin
-    .from("scout_runs")
-    .update({ agent_session_id: handle.session_id })
-    .eq("id", runId);
-
-  console.log("Draining Scout session (up to 15 minutes)...\n");
+  console.log("Starting batched Scout run...\n");
 
   try {
-    const { output, meta } = await handle.drain({
-      maxCostUsd,
-      onUpsert: (opportunityId, action) => {
-        console.log(`  upsert [${action}]: ${opportunityId}`);
+    const { output, meta } = await runScoutBatched(
+      SCOUT_PILOT_SOURCES,
+      runId,
+      {
+        batchSize,
+        maxCostUsd,
+        onBatchComplete: (info) => {
+          console.log(
+            `[scout] batch ${info.batchIndex + 1}/${info.totalBatches} done: ${info.sourcesInBatch} sources, ${info.upsertsInBatch} upserts, ${info.discardsInBatch} discards, $${info.costUsdInBatch.toFixed(2)} (cumulative $${info.cumulativeCostUsd.toFixed(2)})`,
+          );
+        },
       },
-    });
+    );
 
     const finishedAt = new Date().toISOString();
 
@@ -107,13 +108,15 @@ async function main(): Promise<void> {
         found_count: meta.upserts,
         updated_count: 0,
         discarded_count: meta.discards,
+        agent_session_id: meta.session_id || null,
         output: meta as unknown as Record<string, unknown>,
       })
       .eq("id", runId);
 
     console.log("\n--- Scout run complete ---");
     console.log(`run_id:        ${runId}`);
-    console.log(`session_id:    ${meta.session_id}`);
+    console.log(`session_id:    ${meta.session_id} (first batch)`);
+    console.log(`batches:       ${meta.batches ?? 1}`);
     console.log(`visited:       ${output.visited}`);
     console.log(`upserted:      ${output.upserted}`);
     console.log(`discarded:     ${output.discarded}`);
@@ -122,6 +125,12 @@ async function main(): Promise<void> {
     console.log(`input_tokens:  ${meta.usage.input_tokens}`);
     console.log(`output_tokens: ${meta.usage.output_tokens}`);
     console.log(`cost_usd:      $${meta.cost_usd.toFixed(4)}`);
+    if (meta.batch_errors && meta.batch_errors.length > 0) {
+      console.log(`batch_errors:  ${meta.batch_errors.length}`);
+      for (const be of meta.batch_errors) {
+        console.log(`  batch ${be.batch_index}: ${be.message}`);
+      }
+    }
     console.log(`\nrun_summary: ${output.run_summary}`);
 
     // Fetch top 5 upserted titles for quick review.

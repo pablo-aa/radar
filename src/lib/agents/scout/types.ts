@@ -95,6 +95,10 @@ export interface ScoutRunMeta {
   upserts: number;
   discards: number;
   iterations: number;
+  /** Number of MA batches executed (only present on batched runs). */
+  batches?: number;
+  /** Per-batch errors, if any (only present on batched runs). */
+  batch_errors?: Array<{ batch_index: number; message: string }>;
 }
 
 export interface ScoutUsage {

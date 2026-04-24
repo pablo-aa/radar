@@ -73,6 +73,187 @@ const HARD_TIMEOUT_MS = 15 * 60 * 1_000;
 // ---------------------------------------------------------------------------
 
 /**
+ * Thrown by drainSession when the hard cost cap is hit mid-stream.
+ * runScoutBatched catches this class specifically to stop the outer loop
+ * without recording it as a batch error.
+ */
+export class ScoutCostCapAbortError extends Error {
+  constructor(capUsd: number, currentUsd: number) {
+    super(`Scout hard cost cap of $${capUsd.toFixed(2)} hit at $${currentUsd.toFixed(4)}`);
+    this.name = "ScoutCostCapAbortError";
+  }
+}
+
+export interface RunScoutBatchedOptions {
+  /** Sources per MA session. Default 10. */
+  batchSize?: number;
+  /**
+   * Hard global cap. When reached, the active batch aborts mid-stream and no
+   * further batches are started.
+   */
+  maxCostUsd?: number;
+  /** Called after each batch completes (success or error). */
+  onBatchComplete?: (info: {
+    batchIndex: number;
+    totalBatches: number;
+    sourcesInBatch: number;
+    upsertsInBatch: number;
+    discardsInBatch: number;
+    costUsdInBatch: number;
+    cumulativeCostUsd: number;
+  }) => void;
+  abortSignal?: AbortSignal;
+}
+
+/**
+ * Run Scout over `sources` in batches of `batchSize`, each as a separate MA
+ * session. Aggregates usage, upsert/discard counts, and cost into a single
+ * ScoutDrainResult. A failed batch is logged and skipped; the run continues
+ * with the remaining batches.
+ *
+ * session_id in the returned meta is set to the first batch's session_id.
+ * All session IDs are available only in per-batch logs.
+ */
+export async function runScoutBatched(
+  sources: ScoutSource[],
+  scoutRunId: string,
+  options?: RunScoutBatchedOptions,
+): Promise<ScoutDrainResult> {
+  const batchSize = options?.batchSize ?? 10;
+  const maxCostUsd = options?.maxCostUsd ?? Infinity;
+  const abortSignal = options?.abortSignal;
+
+  // Split sources into chunks.
+  const chunks: ScoutSource[][] = [];
+  for (let i = 0; i < sources.length; i += batchSize) {
+    chunks.push(sources.slice(i, i + batchSize));
+  }
+  const totalBatches = chunks.length;
+
+  const totalUsage: ScoutUsage = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  };
+
+  let totalUpserts = 0;
+  let totalDiscards = 0;
+  let totalFetches = 0;
+  let totalIterations = 0;
+  let totalVisited = 0;
+  let cumulativeCostUsd = 0;
+  let firstSessionId: string | null = null;
+  const startedAt = new Date().toISOString();
+  const batchErrors: Array<{ batch_index: number; message: string }> = [];
+  const runSummaryParts: string[] = [];
+
+  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+    // Check abort signal before starting next batch.
+    if (abortSignal?.aborted) {
+      console.log(`[scout] aborted before batch ${batchIndex + 1}/${totalBatches}`);
+      break;
+    }
+
+    // Check cost budget before starting next batch.
+    const remaining = maxCostUsd - cumulativeCostUsd;
+    if (remaining <= 0) {
+      console.log(
+        `[scout] cost cap reached ($${cumulativeCostUsd.toFixed(4)}), stopping before batch ${batchIndex + 1}/${totalBatches}`,
+      );
+      break;
+    }
+
+    const chunk = chunks[batchIndex]!;
+
+    try {
+      const handle = await createScoutSession(chunk, scoutRunId);
+      if (firstSessionId === null) firstSessionId = handle.session_id;
+
+      const { output, meta } = await handle.drain({
+        maxCostUsd: remaining,
+        abortSignal,
+      });
+
+      // Accumulate.
+      totalUsage.input_tokens += meta.usage.input_tokens;
+      totalUsage.output_tokens += meta.usage.output_tokens;
+      totalUsage.cache_read_input_tokens += meta.usage.cache_read_input_tokens;
+      totalUsage.cache_creation_input_tokens += meta.usage.cache_creation_input_tokens;
+      totalUpserts += meta.upserts;
+      totalDiscards += meta.discards;
+      totalFetches += meta.fetches;
+      totalIterations += meta.iterations;
+      totalVisited += output.visited;
+      cumulativeCostUsd += meta.cost_usd;
+      runSummaryParts.push(output.run_summary);
+
+      options?.onBatchComplete?.({
+        batchIndex,
+        totalBatches,
+        sourcesInBatch: chunk.length,
+        upsertsInBatch: meta.upserts,
+        discardsInBatch: meta.discards,
+        costUsdInBatch: meta.cost_usd,
+        cumulativeCostUsd,
+      });
+    } catch (err: unknown) {
+      if (err instanceof ScoutCostCapAbortError) {
+        // Hard cost cap hit mid-stream; stop the outer loop gracefully.
+        console.log(`[scout] ${err.message} — stopping batch loop`);
+        break;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[scout] batch ${batchIndex + 1}/${totalBatches} failed: ${message}`,
+      );
+      batchErrors.push({ batch_index: batchIndex, message });
+
+      options?.onBatchComplete?.({
+        batchIndex,
+        totalBatches,
+        sourcesInBatch: chunk.length,
+        upsertsInBatch: 0,
+        discardsInBatch: 0,
+        costUsdInBatch: 0,
+        cumulativeCostUsd,
+      });
+    }
+  }
+
+  const finishedAt = new Date().toISOString();
+  const runSummary =
+    runSummaryParts.join(" | ") ||
+    `Scout batched run complete. Visited ${totalVisited} sources, upserted ${totalUpserts}, discarded ${totalDiscards}.`;
+
+  const meta: ScoutRunMeta = {
+    model: "claude-opus-4-7",
+    usage: totalUsage,
+    cost_usd: cumulativeCostUsd,
+    // Use the first batch's session_id. All session IDs are logged per-batch.
+    session_id: firstSessionId ?? "",
+    started_at: startedAt,
+    finished_at: finishedAt,
+    fetches: totalFetches,
+    upserts: totalUpserts,
+    discards: totalDiscards,
+    iterations: totalIterations,
+    batches: totalBatches,
+    batch_errors: batchErrors,
+  };
+
+  const output: ScoutOutput = {
+    run_summary: runSummary,
+    visited: totalVisited,
+    upserted: totalUpserts,
+    discarded: totalDiscards,
+    _meta: meta,
+  };
+
+  return { output, meta, session_id: firstSessionId ?? "" };
+}
+
+/**
  * Create a Scout session and return a handle with a drain() method.
  * Mirrors createStrategistSession from the Strategist module.
  */
@@ -129,7 +310,7 @@ async function drainSession(
   let discards = 0;
   let iterations = 0;
   let lastAgentText = "";
-  let costCapMessageSent = false;
+  let costCapHit = false;
 
   const userText = buildScoutMaUserMessage(sources);
 
@@ -167,31 +348,21 @@ async function drainSession(
         accumulateUsage(usage, ev);
         iterations++;
 
-        // Cost cap: if cumulative cost exceeds maxCostUsd, ask agent to stop.
+        // Cost cap: if cumulative cost exceeds maxCostUsd, hard-abort the stream.
         const currentCost = computeCostUsd(usage);
-        if (currentCost >= maxCostUsd && !costCapMessageSent) {
-          costCapMessageSent = true;
-          await client.beta.sessions.events.send(sessionId, {
-            events: [
-              {
-                type: "user.message",
-                content: [
-                  {
-                    type: "text",
-                    text: `Cost cap of $${maxCostUsd.toFixed(2)} reached (current: $${currentCost.toFixed(4)}). Please stop processing new sources and return your summary now.`,
-                  },
-                ],
-              },
-            ],
-          });
+        if (currentCost >= maxCostUsd && !costCapHit) {
+          costCapHit = true;
+          console.log(`[scout] cost cap $${maxCostUsd.toFixed(2)} hit at $${currentCost.toFixed(4)}, hard-aborting session`);
+          stream.controller.abort();
+          throw new ScoutCostCapAbortError(maxCostUsd, currentCost);
         }
       } else if (isAgentCustomToolUse(ev)) {
         if (ev.name === "upsert_opportunity") {
           const parsed = parseUpsertOpportunityInput(ev.input);
           let result: unknown;
           if (parsed) {
-            // Inject scoutRunId if agent didn't provide it.
-            const enriched: Record<string, unknown> = { ...parsed, scout_run_id: parsed["scout_run_id"] ?? scoutRunId };
+            // scout_run_id is authoritative from the caller; the agent's value is ignored.
+            const enriched: Record<string, unknown> = { ...parsed, scout_run_id: scoutRunId };
             result = await executeUpsertOpportunity(enriched, scoutRunId);
             const r = result as { ok: boolean; id?: string; action?: "inserted" | "updated" };
             if (r.ok) {
@@ -217,7 +388,8 @@ async function drainSession(
           const parsed = parseMarkDiscardedInput(ev.input);
           let result: unknown;
           if (parsed) {
-            const enriched: Record<string, unknown> = { ...parsed, scout_run_id: parsed["scout_run_id"] ?? scoutRunId };
+            // scout_run_id is authoritative from the caller; the agent's value is ignored.
+            const enriched: Record<string, unknown> = { ...parsed, scout_run_id: scoutRunId };
             result = await executeMarkDiscarded(enriched);
             const r = result as { ok: boolean };
             if (r.ok) discards++;

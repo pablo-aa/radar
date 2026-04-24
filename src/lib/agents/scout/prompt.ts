@@ -111,12 +111,14 @@ Do not repeat what the tools already persisted. Keep the summary terse.
 `;
 
 export function buildScoutMaUserMessage(sources: ScoutSource[]): string {
+  const N = sources.length;
   const lines = sources.map(
     (s, i) =>
       `${i + 1}. ${s.url}\n   hint: ${s.hint}\n   expected_type: ${s.opportunity_type} | expected_loc: ${s.expected_loc}`,
   );
   return (
-    `Index these ${sources.length} sources. For each, research the opportunity thoroughly, then call upsert_opportunity or mark_discarded.\n\n` +
-    lines.join("\n\n")
+    `Index these ${N} sources. For each, research the opportunity thoroughly, then call upsert_opportunity or mark_discarded.\n\n` +
+    lines.join("\n\n") +
+    `\n\nYou are receiving ${N} sources. Process each sequentially, calling upsert_opportunity or mark_discarded for each before moving on. Do not stop until you have emitted one of those tool calls for every source. Only then write your one-line summary.`
   );
 }
