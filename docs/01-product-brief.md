@@ -20,13 +20,14 @@ The author has firsthand experience with underpublicized programs (METI Japan, H
 
 ## What they get (MVP output)
 
-After onboarding (LinkedIn + GitHub + resume PDF + optional personal site), the user receives three outputs on a weekly cadence:
+After onboarding (GitHub plus an optional CV-style document and personal site URL), the user receives a weekly **radar** organized into four opportunity sections plus a 90-day plan:
 
-1. **5 opportunities firing now** — real cards with source URL, deadline, funding value in BRL, and a *why you* paragraph referencing specific repos, projects, or profile fields.
-2. **3 skills or stacks worth exploring** — grounded in the user's current profile + broader market trends.
-3. **3 long-horizon programs** — masters, fellowships, or residencies realistic to target over the next 12–24 months.
+1. **Dated, one-shot** (up to 3) — programs with a specific deadline this year (e.g. YC batch, Chevening).
+2. **Recurrent, annual** (up to 3) — programs that return every year, worth preparing for now (e.g. METI Japan, MEXT, GSoC, Maratona SBC).
+3. **Rolling** (up to 2) — always-open programs with a 2-to-6-week decision window (e.g. Emergent Ventures, GDE, Gitcoin).
+4. **Arenas** (up to 3) — ongoing practice or visibility tracks with no deadline, suggested cadence (e.g. competitive programming, OSS contribution, building in public).
 
-Plus a **90-day plan** synthesizing which actions move them closer to the long-horizon programs.
+Each card carries a fit score, the source URL, a deadline or cadence, a funding figure, and a *why you* paragraph that cites specific profile fields. The radar closes with a **90-day plan** of 3 to 5 sequenced actions, each tied to one of the cards above.
 
 ## Differentiation
 

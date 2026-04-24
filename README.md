@@ -22,9 +22,9 @@ Of the ~500 developers approved for the *"Built with 4.7"* hackathon, only **2 a
 
 ## What it does (MVP)
 
-1. **Anamnesis**: connect your GitHub, upload a resume PDF, optionally drop a personal site URL. A Managed Agent reads all three and builds a structured profile.
+1. **Anamnesis**: connect your GitHub, optionally add a CV-style document and a personal site URL. A Managed Agent reads what you give it and builds a structured profile.
 2. **Scout**: a shared Managed Agent crawls curated sources on a schedule (FAPESP, Finep, Emergent Ventures, YC, MEXT, Fundação Estudar, Gitcoin, GitHub Sponsors, and many more) and normalizes the universe of current opportunities.
-3. **Strategist**: a per-user Managed Agent ranks opportunities against your profile, writes a *why you* paragraph for each, and maps out stacks and programs worth targeting over the next 90 days.
+3. **Strategist**: a per-user Managed Agent ranks opportunities against your profile, writes a *why you* paragraph for each, and maps out a 90-day plan tied to specific cards.
 
 ## Architecture
 
@@ -34,17 +34,14 @@ See [`docs/02-architecture.md`](docs/02-architecture.md) for the full picture. S
 
 ```
 radar/
-├── apps/
-│   └── web/           Next.js 16, landing + auth + live agent UI
-├── agents/
-│   ├── anamnesis/     profile builder prompt + harness
-│   ├── scout/         weekly source crawler prompt + harness
-│   └── strategist/    per-user matcher prompt + harness
+├── src/               Next.js 16 App Router, landing + auth + live agent UI
+├── public/            static assets
+├── supabase/          schema migrations and config
+├── scripts/           one-off CLI tooling (install hooks, ops)
 ├── data/
 │   ├── sample/        fake profiles for tests and public demos (committed)
 │   └── private/       real profile data, experiments (gitignored)
-├── docs/              product brief, architecture
-└── supabase/          DB migrations
+└── docs/              product brief, architecture
 ```
 
 ## Non-goals

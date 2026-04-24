@@ -1,18 +1,8 @@
 {
   "name": "radar",
   "private": true,
-  "workspaces": [
-    "agents/_shared",
-    "agents/anamnesis",
-    "agents/scout",
-    "agents/strategist"
-  ],
   "engines": {
     "node": ">=20"
-  },
-  "scripts": {
-    "strategist:setup": "npm -w @radar/strategist run setup",
-    "strategist:run": "npm -w @radar/strategist run run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",

@@ -10,7 +10,7 @@ set -euo pipefail
 
 # Value-level patterns. The length thresholds avoid matching the short pattern
 # names quoted inside CLAUDE.md's rule text.
-VALUE_PATTERN='(sk-ant-[A-Za-z0-9_-]{40,})|(sk-proj-[A-Za-z0-9_-]{20,})|(ghp_[A-Za-z0-9]{30,})|(xoxp-[A-Za-z0-9_-]{20,})|(sb_secret_[A-Za-z0-9_]{20,})|(eyJ[A-Za-z0-9_=-]{30,}\.[A-Za-z0-9_=-]{10,}\.[A-Za-z0-9_=-]{10,})'
+VALUE_PATTERN='(sk-ant-[A-Za-z0-9_-]{40,})|(sk-proj-[A-Za-z0-9_-]{20,})|(ghp_[A-Za-z0-9]{30,})|(gho_[A-Za-z0-9]{30,})|(github_pat_[A-Za-z0-9_]{20,})|(xoxp-[A-Za-z0-9_-]{20,})|(xoxb-[A-Za-z0-9_-]{20,})|(sb_secret_[A-Za-z0-9_]{20,})|(sbp_[a-f0-9]{40,})|(eyJ[A-Za-z0-9_=-]{30,}\.[A-Za-z0-9_=-]{10,}\.[A-Za-z0-9_=-]{10,})'
 
 # Scan only added lines in the staged diff.
 MATCHES=$(git diff --cached -U0 | grep -E "^\+" | grep -v "^+++ " | grep -E "$VALUE_PATTERN" || true)
@@ -30,7 +30,7 @@ if [ -n "$MATCHES" ]; then
 fi
 
 # Also refuse to stage files whose name alone signals secret content.
-FORBIDDEN_FILES=$(git diff --cached --name-only | grep -E '^(\.env$|\.env\.local$|\.env\.development\.local$|\.env\.test\.local$|\.env\.production\.local$|.*\.key$|.*\.pem$|agents/[^/]+/\.agent-ids\.json$)' || true)
+FORBIDDEN_FILES=$(git diff --cached --name-only | grep -E '^(\.env$|\.env\.local$|\.env\.development\.local$|\.env\.test\.local$|\.env\.production\.local$|.*\.key$|.*\.pem$|.*\.agent-ids\.json$)' || true)
 
 if [ -n "$FORBIDDEN_FILES" ]; then
   echo ""

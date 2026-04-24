@@ -14,9 +14,11 @@ Three composed Managed Agents with distinct responsibilities. Built on Anthropic
 ┌──────────────────────────────────────────────────────────┐
 │  1. ANAMNESIS AGENT                                      │
 │     Trigger: on sign-up + quarterly re-run                │
-│     Input: GitHub username + resume PDF + personal site  │
-│     Tools: web_fetch (read personal site), bash (parse   │
-│            PDF), custom "save_profile" tool                │
+│     Input: GitHub handle (primary) + optional CV-style    │
+│            document + optional personal site URL          │
+│     Tools: web_fetch (read personal site and GitHub),     │
+│            file processing for the document, custom       │
+│            save_profile tool                               │
 │     Output: structured profile JSON → profiles table      │
 └──────────────────────────────────────────────────────────┘
                            ↓
@@ -26,23 +28,26 @@ Three composed Managed Agents with distinct responsibilities. Built on Anthropic
 │  2. SCOUT AGENT (shared across all users)                 │
 │     Trigger: cron, weekly                                 │
 │     Input: none (reads canonical source list from DB)     │
-│     Tools: web_search + web_fetch + bash + custom        │
-│            "save_opportunities" tool                       │
-│     Output: rows in opportunities table + trends table   │
+│     Tools: web_search + web_fetch + bash + custom         │
+│            save_opportunities_batch tool                   │
+│     Output: rows in opportunities + scout_runs +          │
+│             scout_discarded                                │
 └──────────────────────────────────────────────────────────┘
                            ↓
-                opportunities, trends (Supabase)
+                  opportunities (Supabase)
                            ↓
 ┌──────────────────────────────────────────────────────────┐
 │  3. STRATEGIST AGENT (per-user)                          │
 │     Trigger: weekly cron per user, or on-demand           │
-│     Input: user profile + opportunities DB + trends DB   │
-│     Tools: custom "query_db" tool — no web_search needed  │
-│     Output: 5 opportunity cards + 3 skill cards +         │
-│             3 program cards + 90-day plan                  │
+│     Input: user profile + opportunities DB                │
+│     Tools: custom query_opps tool, custom render_card     │
+│            tool, no web_search needed                      │
+│     Output: 4-section plan (dated one-shot, recurrent     │
+│             annual, rolling, arenas) + 3 to 5 item        │
+│             90-day plan                                    │
 └──────────────────────────────────────────────────────────┘
                            ↓
-                     run_outputs (Supabase)
+                  strategist_runs (Supabase)
                            ↓
                    delivered to user
 ```
@@ -50,16 +55,32 @@ Three composed Managed Agents with distinct responsibilities. Built on Anthropic
 ## Data model (sketch)
 
 ```
-profiles          id · user_id · github · linkedin · pdf_url · site_url
-                   · structured_profile JSONB · anamnesis_run_id · updated_at
+profiles          user_id · github_handle · cv_url · site_url
+                   · structured_profile JSONB · onboard_state JSONB
+                   · anamnesis_run_id · updated_at
 
 opportunities     id · source_url · title · deadline · funding_brl
-                   · category (grant|fellowship|accelerator|bounty|...)
-                   · tags TEXT[] · raw_content TEXT · scout_run_id · created_at
+                   · category (dated_one_shot | recurrent_annual
+                               | rolling | arena)
+                   · deep_data JSONB · scout_run_id
+                   · created_at · updated_at
 
-trends            id · stack · trajectory_note · evidence_url · scout_run_id
+scout_runs        id · started_at · finished_at · sources_count
+                   · found · updated · discarded · agent_session_id
+                   · status
 
-run_outputs       id · user_id · strategist_run_id · cards JSONB · created_at
+scout_discarded   id · scout_run_id · host · path
+                   · reason (out-of-scope | duplicate | unchanged
+                             | throttled | error | low-fit
+                             | unverifiable)
+                   · detail · decided_at
+
+anamnesis_runs    id · user_id · started_at · finished_at
+                   · agent_session_id · status · output JSONB
+
+strategist_runs   id · user_id · started_at · finished_at
+                   · profile_snapshot JSONB · opportunity_ids[]
+                   · output JSONB · agent_session_id · status
 ```
 
 ## Future layer (out of scope for MVP)
@@ -72,7 +93,7 @@ run_outputs       id · user_id · strategist_run_id · cards JSONB · created_a
 
 ## Open tensions (decisions to revisit)
 
-- **Cron runtime for Scout** — Supabase Edge Functions vs. Vercel Cron vs. external scheduler
-- **Anamnesis cache** — re-run from scratch quarterly vs. incremental diff of GitHub activity
-- **Personal-site fetching when a site blocks the default crawler** — evaluate fallbacks only when observed failures justify the cost
-- **Scout source list format** — hand-curated YAML vs. seeded Supabase table vs. Scout discovers its own sources
+- **Cron runtime for Scout**: Supabase Edge Functions vs. Vercel Cron vs. external scheduler.
+- **Anamnesis cache**: re-run from scratch quarterly vs. incremental diff of GitHub activity.
+- **Personal-site fetching when a site blocks the default crawler**: evaluate fallbacks only when observed failures justify the cost.
+- **Scout source list format**: hand-curated YAML vs. seeded Supabase table vs. Scout discovers its own sources.
