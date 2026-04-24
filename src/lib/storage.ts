@@ -60,6 +60,8 @@ export async function uploadCV(
 /**
  * Upload a voice-note blob for the given user. Returns the storage path.
  * Throws on invalid mime, oversize, or upload failure.
+ *
+ * @deprecated kept for future voice v2 — no longer called by IntakeForm.
  */
 export async function uploadVoiceNote(
   userId: string,

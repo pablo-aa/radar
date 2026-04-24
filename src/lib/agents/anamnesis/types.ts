@@ -8,6 +8,12 @@ export interface AnamnesisInput {
   email: string | null;
   /** Existing structured_profile fields from the intake form, if any. */
   intake: Record<string, unknown> | null;
+  /**
+   * Supabase storage path for the user's CV PDF (bucket: cvs).
+   * If present, run.ts will fetch signed URL, download bytes, and include
+   * the PDF as a native document block in the first user message.
+   */
+  cv_url?: string | null;
 }
 
 export interface AnamnesisOssSiganls {

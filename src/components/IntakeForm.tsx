@@ -1,16 +1,15 @@
 "use client";
 
-/* global File, Blob, MediaRecorder, MediaStream, navigator */
+/* global File */
 
-// Intake form. Real GitHub data, real CV upload, real voice capture (when
-// MediaRecorder is available), POST to /api/anamnesis/run, navigate to
-// /generating. The form is editorial-first; live confirm panel mirrors the
-// inputs.
+// Intake form. Real GitHub data, real CV upload, free-text moment textarea,
+// POST to /api/anamnesis/run, navigate to /generating. The form is
+// editorial-first; live confirm panel mirrors the inputs.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { GitHubProfile } from "@/lib/github";
-import { uploadCV, uploadVoiceNote } from "@/lib/storage";
+import { uploadCV } from "@/lib/storage";
 
 const INTEREST_OPTIONS = [
   "AI safety",
@@ -31,7 +30,7 @@ const INTEREST_OPTIONS = [
 
 const INTEREST_MIN = 3;
 const INTEREST_MAX = 6;
-const VOICE_CAP_SECONDS = 90;
+const MOMENT_MAX_CHARS = 2000;
 
 type Props = {
   initialHandle: string;
@@ -55,22 +54,8 @@ type SiteFetchState =
   | { kind: "ok"; title: string | null }
   | { kind: "soft-fail" };
 
-type VoiceState =
-  | { kind: "unsupported" }
-  | { kind: "idle" }
-  | { kind: "recording"; seconds: number }
-  | { kind: "uploading" }
-  | { kind: "ready"; path: string; seconds: number }
-  | { kind: "error"; message: string };
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function fmtClock(s: number): string {
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${r.toString().padStart(2, "0")}`;
 }
 
 function fileBaseName(name: string): string {
@@ -93,61 +78,21 @@ export default function IntakeForm({
   const [gh, setGh] = useState(initialHandle);
   const [site, setSite] = useState(initialSiteUrl ?? "");
   const [tags, setTags] = useState<string[]>([]);
+  const [momentText, setMomentText] = useState("");
   const [cv, setCv] = useState<CvState>(
     initialCvPath
       ? { kind: "ready", name: initialCvPath.split("/").pop() ?? "cv.pdf", path: initialCvPath }
       : { kind: "idle" },
   );
   const [siteFetch, setSiteFetch] = useState<SiteFetchState>({ kind: "idle" });
-  // SSR renders "idle" so we don't break hydration; on mount we flip to
-  // "unsupported" if MediaRecorder is missing. The voice block conditionally
-  // renders only when mounted, so the user never sees a flash of the wrong UI.
-  const [voice, setVoice] = useState<VoiceState>({ kind: "idle" });
-  const [voiceProbed, setVoiceProbed] = useState(false);
 
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string>("");
 
-  // Refs holding active recorder state. Cleaned up on unmount.
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const recorderChunksRef = useRef<Blob[]>([]);
-  const recorderTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const recorderStreamRef = useRef<MediaStream | null>(null);
-  const recorderSecondsRef = useRef<number>(0);
-
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    // Probing browser capability after mount is the documented escape hatch:
-    // we cannot synchronously read window.MediaRecorder during SSR, and the
-    // voice block is hidden until probed so the user never sees the wrong UI.
-    setVoiceProbed(true);
-    if (typeof window === "undefined") return;
-    if (typeof window.MediaRecorder === "undefined") {
-      setVoice({ kind: "unsupported" });
-    }
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  useEffect(() => {
-    return () => {
-      if (recorderTimerRef.current) {
-        clearInterval(recorderTimerRef.current);
-        recorderTimerRef.current = null;
-      }
-      if (recorderRef.current && recorderRef.current.state !== "inactive") {
-        try {
-          recorderRef.current.stop();
-        } catch {
-          // ignore
-        }
-      }
-      if (recorderStreamRef.current) {
-        recorderStreamRef.current.getTracks().forEach((t) => t.stop());
-        recorderStreamRef.current = null;
-      }
-    };
-  }, []);
+  // Silence unused-effect warning: keep this to preserve hook order stability
+  // across potential future additions.
+  useEffect(() => {}, []);
 
   // ── tag toggle ────────────────────────────────────────────────────────
   const toggleTag = (t: string) => {
@@ -206,80 +151,6 @@ export default function IntakeForm({
     }
   };
 
-  // ── voice recording ───────────────────────────────────────────────────
-  const startRecording = async () => {
-    if (typeof window === "undefined" || typeof window.MediaRecorder === "undefined") {
-      setVoice({ kind: "unsupported" });
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recorderStreamRef.current = stream;
-      let mr: MediaRecorder;
-      try {
-        mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      } catch {
-        mr = new MediaRecorder(stream);
-      }
-      recorderChunksRef.current = [];
-      mr.ondataavailable = (ev) => {
-        if (ev.data && ev.data.size > 0) {
-          recorderChunksRef.current.push(ev.data);
-        }
-      };
-      mr.onstop = async () => {
-        if (recorderTimerRef.current) {
-          clearInterval(recorderTimerRef.current);
-          recorderTimerRef.current = null;
-        }
-        const seconds = recorderSecondsRef.current;
-        if (recorderStreamRef.current) {
-          recorderStreamRef.current.getTracks().forEach((t) => t.stop());
-          recorderStreamRef.current = null;
-        }
-        const type = mr.mimeType || "audio/webm";
-        const blob = new Blob(recorderChunksRef.current, { type });
-        recorderChunksRef.current = [];
-        setVoice({ kind: "uploading" });
-        try {
-          const { path } = await uploadVoiceNote(userId, blob);
-          setVoice({ kind: "ready", path, seconds });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Voice upload failed.";
-          setVoice({ kind: "error", message });
-        }
-      };
-      recorderRef.current = mr;
-      mr.start();
-      recorderSecondsRef.current = 0;
-      setVoice({ kind: "recording", seconds: 0 });
-      recorderTimerRef.current = setInterval(() => {
-        recorderSecondsRef.current += 1;
-        const elapsed = recorderSecondsRef.current;
-        if (elapsed >= VOICE_CAP_SECONDS) {
-          stopRecording();
-          return;
-        }
-        setVoice({ kind: "recording", seconds: elapsed });
-      }, 1000);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Microphone access denied.";
-      setVoice({ kind: "error", message });
-    }
-  };
-
-  const stopRecording = () => {
-    const mr = recorderRef.current;
-    if (mr && mr.state !== "inactive") {
-      try {
-        mr.stop();
-      } catch {
-        // ignore
-      }
-    }
-  };
-
   // ── submit ────────────────────────────────────────────────────────────
   const minMet = tags.length >= INTEREST_MIN;
   const canSubmit = !locked && !submitting && !!gh.trim() && minMet;
@@ -297,6 +168,7 @@ export default function IntakeForm({
 
     const cvPath = cv.kind === "ready" ? cv.path : undefined;
     const siteUrl = site.trim() || undefined;
+    const momentTrimmed = momentText.trim() || undefined;
 
     try {
       const res = await fetch("/api/anamnesis/run", {
@@ -307,6 +179,7 @@ export default function IntakeForm({
           cv_url: cvPath,
           site_url: siteUrl,
           declared_interests: tags,
+          moment_text: momentTrimmed,
         }),
       });
       if (!res.ok) {
@@ -363,22 +236,7 @@ export default function IntakeForm({
     }
   })();
 
-  const voiceStatus = (() => {
-    switch (voice.kind) {
-      case "unsupported":
-        return null;
-      case "idle":
-        return { label: "recommended", cls: "pending" };
-      case "recording":
-        return { label: `recording · ${fmtClock(voice.seconds)} / 1:30`, cls: "pending" };
-      case "uploading":
-        return { label: "uploading...", cls: "pending" };
-      case "ready":
-        return { label: `captured · ${fmtClock(voice.seconds)}`, cls: "ok" };
-      case "error":
-        return { label: voice.message, cls: "pending" };
-    }
-  })();
+  const momentCharsLeft = MOMENT_MAX_CHARS - momentText.length;
 
   return (
     <>
@@ -465,7 +323,7 @@ export default function IntakeForm({
                     : "drop a PDF or click to browse"}
               </span>
               <span style={{ color: "var(--ink-4)", fontSize: 11 }}>
-                {cv.kind === "ready" ? "✓ ready" : "select file"}
+                {cv.kind === "ready" ? "ready" : "select file"}
               </span>
               <input
                 type="file"
@@ -499,67 +357,36 @@ export default function IntakeForm({
             />
           </div>
 
-          {voiceProbed && voice.kind !== "unsupported" && voiceStatus && (
-            <div className="input-block">
-              <div className="input-hd">
-                <span>Voice note · 90 seconds</span>
-                <span className={"status " + voiceStatus.cls}>
-                  {voiceStatus.label}
-                </span>
-              </div>
-              <p className="input-hint">
-                Tell Anamnesis what you are actually building this year. One
-                minute is enough, and it is the single highest-signal input.
-              </p>
-              <div className="voice-box">
-                <span
-                  className="voice-dot"
-                  style={
-                    voice.kind === "recording" || voice.kind === "ready"
-                      ? { background: "var(--accent)" }
-                      : {}
-                  }
-                ></span>
-                <span style={{ flex: 1 }}>
-                  {voice.kind === "ready"
-                    ? "captured · transcript ready for Strategist"
-                    : voice.kind === "recording"
-                      ? `recording... ${fmtClock(voice.seconds)} / 1:30`
-                      : voice.kind === "uploading"
-                        ? "uploading audio..."
-                        : voice.kind === "error"
-                          ? voice.message
-                          : "press record when ready"}
-                </span>
-                {voice.kind === "recording" ? (
-                  <button
-                    type="button"
-                    className="btn sm ghost"
-                    onClick={stopRecording}
-                  >
-                    Stop
-                  </button>
-                ) : voice.kind === "uploading" ? (
-                  <button
-                    type="button"
-                    className="btn sm ghost"
-                    disabled
-                    style={{ opacity: 0.5 }}
-                  >
-                    Uploading
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn sm ghost"
-                    onClick={startRecording}
-                  >
-                    {voice.kind === "ready" ? "Re-record" : "Record"}
-                  </button>
-                )}
-              </div>
+          <div className="input-block">
+            <div className="input-hd">
+              <span>O seu momento atual</span>
+              <span className="status" style={{ color: momentCharsLeft < 200 ? "var(--accent)" : undefined }}>
+                {momentText.length > 0
+                  ? `${momentCharsLeft} chars remaining`
+                  : "optional"}
+              </span>
             </div>
-          )}
+            <p className="input-hint">
+              2 a 3 paragrafos sobre o que voce esta construindo, aprendendo, ou buscando.
+            </p>
+            <textarea
+              className="field"
+              value={momentText}
+              onChange={(e) => {
+                if (e.target.value.length <= MOMENT_MAX_CHARS) {
+                  setMomentText(e.target.value);
+                }
+              }}
+              rows={6}
+              style={{
+                resize: "vertical",
+                fontFamily: "inherit",
+                lineHeight: 1.6,
+                background: "var(--paper)",
+              }}
+              placeholder="Conte o que voce esta construindo este ano, o que esta aprendendo, ou o que esta buscando. Um paragrafo e suficiente."
+            />
+          </div>
 
           <div className="input-block">
             <div className="input-hd">
@@ -702,15 +529,11 @@ export default function IntakeForm({
               <span className="v">{site || "(none)"}</span>
             </div>
             <div>
-              <span className="k">voice</span>
+              <span className="k">momento</span>
               <span className="v">
-                {voice.kind === "ready"
-                  ? `captured · ${fmtClock(voice.seconds)}`
-                  : voice.kind === "unsupported"
-                    ? "(unsupported on this browser)"
-                    : voice.kind === "recording"
-                      ? `recording · ${fmtClock(voice.seconds)}`
-                      : "skipped"}
+                {momentText.trim()
+                  ? `${momentText.trim().slice(0, 60)}${momentText.trim().length > 60 ? "..." : ""}`
+                  : "skipped"}
               </span>
             </div>
             <div>
@@ -773,17 +596,13 @@ export default function IntakeForm({
               </li>
               <li>
                 <span
-                  className={
-                    "ana-modal-dot " + (voice.kind === "ready" ? "" : "off")
-                  }
+                  className={"ana-modal-dot " + (momentText.trim() ? "" : "off")}
                 />{" "}
-                Voice note ·{" "}
+                Momento ·{" "}
                 <b>
-                  {voice.kind === "ready"
-                    ? "captured"
-                    : voice.kind === "unsupported"
-                      ? "unsupported"
-                      : "skipped (recommended)"}
+                  {momentText.trim()
+                    ? `${momentText.trim().length} chars`
+                    : "skipped (recommended)"}
                 </b>
               </li>
               <li>

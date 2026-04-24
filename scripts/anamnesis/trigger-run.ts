@@ -72,6 +72,7 @@ async function main() {
       display_name: profile.display_name,
       email: profile.email,
       intake: profile.structured_profile,
+      cv_url: profile.cv_url ?? null,
     });
 
     console.log(`\n--- result ---`);

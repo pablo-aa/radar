@@ -31,12 +31,16 @@ export const maxDuration = 300;
 
 type AnamnesisBody = {
   force?: boolean;
+  moment_text?: string;
 };
 
 function parseBody(raw: unknown): AnamnesisBody {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
-  return { force: r.force === true };
+  return {
+    force: r.force === true,
+    moment_text: typeof r.moment_text === "string" ? r.moment_text : undefined,
+  };
 }
 
 /**
@@ -166,16 +170,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const runId: string = runInsert.data.id;
 
   // Build the Anamnesis input from profile fields.
+  // moment_text from the request body is merged into the intake object so
+  // buildUserMessage surfaces it as an intake_form_field for the agent.
+  const baseIntake: Record<string, unknown> =
+    profile.structured_profile &&
+    typeof profile.structured_profile === "object" &&
+    !Array.isArray(profile.structured_profile)
+      ? { ...(profile.structured_profile as Record<string, unknown>) }
+      : {};
+
+  if (body.moment_text) {
+    baseIntake.moment_text = body.moment_text;
+  }
+
   const anamnesisInput: AnamnesisInput = {
     handle: profile.github_handle ?? profile.email ?? userId,
     display_name: profile.display_name,
     email: profile.email,
-    intake:
-      profile.structured_profile &&
-      typeof profile.structured_profile === "object" &&
-      !Array.isArray(profile.structured_profile)
-        ? (profile.structured_profile as Record<string, unknown>)
-        : null,
+    intake: Object.keys(baseIntake).length > 0 ? baseIntake : null,
+    cv_url: typeof profile.cv_url === "string" && profile.cv_url.length > 0
+      ? profile.cv_url
+      : null,
   };
 
   // 8. Call runAnamnesis().

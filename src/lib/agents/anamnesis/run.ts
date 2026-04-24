@@ -1,4 +1,7 @@
 import "server-only";
+
+/* global Buffer */
+
 import { getAnthropicClient } from "@/lib/agents/strategist/client";
 import { computeCostUsd } from "@/lib/agents/strategist/pricing";
 import { ANAMNESIS_SYSTEM_PROMPT, buildUserMessage } from "./prompt";
@@ -11,9 +14,65 @@ import type {
   AnamnesisContentBlock,
 } from "./types";
 import type { AnamnesisReport } from "@/lib/sample-data/anamnesis-report";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_ITERATIONS = 12;
 const TIMEOUT_MS = 180_000;
+
+/** Maximum PDF byte size we will send to the model (2 MB). */
+const CV_MAX_BYTES = 2 * 1024 * 1024;
+/** Approximate page-count guard: 5 pages ~ 5*50KB = 250 KB but we use byte proxy below. */
+const CV_MAX_PAGES_APPROX_BYTES = 5 * 100 * 1024; // ~500 KB as a proxy for 5 pages
+
+// ---------------------------------------------------------------------------
+// CV fetch helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt to fetch the CV PDF from Supabase Storage and base64-encode it.
+ * Returns null on any failure so the caller can proceed without the document.
+ */
+async function fetchCvBase64(cvPath: string): Promise<string | null> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.storage
+      .from("cvs")
+      .createSignedUrl(cvPath, 300); // 5-minute TTL
+
+    if (error || !data?.signedUrl) {
+      console.warn("[anamnesis/run] CV signed URL failed:", error?.message);
+      return null;
+    }
+
+    const response = await globalThis.fetch(data.signedUrl);
+    if (!response.ok) {
+      console.warn("[anamnesis/run] CV fetch failed:", response.status, response.statusText);
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const byteLength = arrayBuffer.byteLength;
+
+    if (byteLength > CV_MAX_BYTES) {
+      console.warn(
+        `[anamnesis/run] CV too large (${byteLength} bytes > ${CV_MAX_BYTES}), skipping document block`,
+      );
+      return null;
+    }
+
+    if (byteLength > CV_MAX_PAGES_APPROX_BYTES) {
+      console.warn(
+        `[anamnesis/run] CV may exceed 5-page cap (${byteLength} bytes), skipping document block`,
+      );
+      return null;
+    }
+
+    return Buffer.from(arrayBuffer).toString("base64");
+  } catch (err) {
+    console.warn("[anamnesis/run] CV fetch threw:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -183,6 +242,11 @@ export async function runAnamnesis(
   };
   let toolCalls = 0;
 
+  type DocumentBlock = {
+    type: "document";
+    source: { type: "base64"; media_type: "application/pdf"; data: string };
+  };
+
   type MessageParam = {
     role: "user" | "assistant";
     content:
@@ -191,20 +255,42 @@ export async function runAnamnesis(
           | { type: "text"; text: string }
           | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
           | { type: "tool_result"; tool_use_id: string; content: string }
+          | DocumentBlock
         >;
   };
 
-  const messages: MessageParam[] = [
+  // Attempt to fetch CV PDF bytes if a path was provided.
+  const cvBase64 = input.cv_url ? await fetchCvBase64(input.cv_url) : null;
+  const cvAttached = cvBase64 !== null;
+
+  const firstUserContent: Array<
+    { type: "text"; text: string } | DocumentBlock
+  > = [
     {
-      role: "user",
-      content: buildUserMessage({
+      type: "text",
+      text: buildUserMessage({
         handle: input.handle,
         profile: {
           display_name: input.display_name,
           email: input.email,
         },
         intake: input.intake,
+        cvAttached,
       }),
+    },
+  ];
+
+  if (cvAttached) {
+    firstUserContent.push({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: cvBase64 },
+    });
+  }
+
+  const messages: MessageParam[] = [
+    {
+      role: "user",
+      content: firstUserContent,
     },
   ];
 

@@ -201,6 +201,10 @@ Many Brazilian developers navigate Simples Nacional, MEI, PJ vs CLT contracts, a
 - All prose fields should read as editorial: direct, honest, slightly irreverent.
 - Emit ONLY the raw JSON. No preamble, no explanation, no markdown code fences.
 
+# CV document
+
+The user's CV may be attached as a PDF document block in this message. If present (cv_attached: yes), read it carefully and use it to enrich the profile: extract roles, dates, project descriptions, achievements, and any context not visible on GitHub. Cite it in profile.cited_profile_fields as "cv_pdf".
+
 # What you do NOT do
 
 - Do not mention specific grants, fellowships, or accelerators by name as recommendations anywhere in the output.
@@ -209,6 +213,7 @@ Many Brazilian developers navigate Simples Nacional, MEI, PJ vs CLT contracts, a
 
 /**
  * Builds the initial user message that carries profile inputs for one Anamnesis run.
+ * cvAttached signals whether a PDF document block follows in the same message.
  */
 export function buildUserMessage(args: {
   handle: string;
@@ -217,6 +222,7 @@ export function buildUserMessage(args: {
     email: string | null;
   };
   intake: Record<string, unknown> | null;
+  cvAttached?: boolean;
 }): string {
   const lines: string[] = [
     "Build the Anamnesis profile and report for this developer. Use the fetch_github_profile and fetch_github_repos tools, then emit ONLY the JSON wrapper object with both 'profile' and 'report' keys.",
@@ -231,6 +237,8 @@ export function buildUserMessage(args: {
   if (args.profile.email) {
     lines.push(`  email: ${args.profile.email}`);
   }
+
+  lines.push(`  cv_attached: ${args.cvAttached === true ? "yes" : "no"}`);
 
   if (args.intake && Object.keys(args.intake).length > 0) {
     lines.push(`  intake_form_fields:`);
