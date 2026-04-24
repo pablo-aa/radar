@@ -471,42 +471,52 @@ async function drainSession(
           console.log(
             `[scout] idle at ${committed}/${target}, nudging (attempt ${nudgeCount}/3)`,
           );
+          // Three-step nudge with retry. The MA API rejects user.message
+          // when any agent event is still waiting on a response. The
+          // sequence below (a) interrupts the agent, (b) waits briefly so
+          // pending acks drain, (c) retries the user.message up to 3
+          // times with exponential backoff. If every retry fails we
+          // treat the session as terminal.
+          let nudgeDelivered = false;
           try {
-            // Two-step nudge. Step 1: user.interrupt clears any pending
-            // agent events that would reject a user.message with "waiting
-            // on responses to events". Step 2: user.message delivers the
-            // continuation instruction. The MA API rejects user.message
-            // at idle-after-tool-burst even though the session reported
-            // idle, because tool acks can be in flight.
             await client.beta.sessions.events.send(sessionId, {
               events: [{ type: "user.interrupt" }],
             });
-            await client.beta.sessions.events.send(sessionId, {
-              events: [
-                {
-                  type: "user.message",
-                  content: [
-                    {
-                      type: "text",
-                      text:
-                        `You stopped at ${committed}/${target} sources committed. ` +
-                        `You still need to emit upsert_opportunity or mark_discarded for ${target - committed} more sources. ` +
-                        `Resume processing the remaining sources from the list now. ` +
-                        `Do not write a summary until all ${target} sources are committed.`,
-                    },
-                  ],
-                },
-              ],
-            });
-            continue;
-          } catch (nudgeErr: unknown) {
+          } catch (interruptErr: unknown) {
             console.warn(
-              `[scout] nudge send failed, treating as terminal:`,
-              nudgeErr instanceof Error ? nudgeErr.message : nudgeErr,
+              `[scout] interrupt failed:`,
+              interruptErr instanceof Error ? interruptErr.message : interruptErr,
             );
-            exitReason = "terminal";
-            break;
           }
+          const nudgeText =
+            `You stopped at ${committed}/${target} sources committed. ` +
+            `You still need to emit upsert_opportunity or mark_discarded for ${target - committed} more sources. ` +
+            `Resume processing the remaining sources from the list now. ` +
+            `Do not write a summary until all ${target} sources are committed.`;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+            try {
+              await client.beta.sessions.events.send(sessionId, {
+                events: [
+                  {
+                    type: "user.message",
+                    content: [{ type: "text", text: nudgeText }],
+                  },
+                ],
+              });
+              nudgeDelivered = true;
+              break;
+            } catch (sendErr: unknown) {
+              const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+              console.warn(`[scout] nudge message retry ${attempt + 1}/3 failed:`, msg.slice(0, 180));
+            }
+          }
+          if (nudgeDelivered) {
+            continue;
+          }
+          console.warn(`[scout] all nudge retries failed, treating as terminal`);
+          exitReason = "terminal";
+          break;
         }
         exitReason = "terminal";
         break;
