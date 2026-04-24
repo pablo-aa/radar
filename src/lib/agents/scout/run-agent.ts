@@ -472,6 +472,15 @@ async function drainSession(
             `[scout] idle at ${committed}/${target}, nudging (attempt ${nudgeCount}/3)`,
           );
           try {
+            // Two-step nudge. Step 1: user.interrupt clears any pending
+            // agent events that would reject a user.message with "waiting
+            // on responses to events". Step 2: user.message delivers the
+            // continuation instruction. The MA API rejects user.message
+            // at idle-after-tool-burst even though the session reported
+            // idle, because tool acks can be in flight.
+            await client.beta.sessions.events.send(sessionId, {
+              events: [{ type: "user.interrupt" }],
+            });
             await client.beta.sessions.events.send(sessionId, {
               events: [
                 {
