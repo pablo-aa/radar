@@ -7,12 +7,11 @@
 // /api/onboarding/status endpoint every 10s and redirects to /report when
 // both are done.
 //
-// Phases shown to the user:
-//   1. anamnesis running (or pending)            -> "Lendo seu trabalho"
-//   2. anamnesis done, strategist null/running   -> "Comparando com o catalogo"
-//   3. both done                                  -> redirect to /report
-//   anamnesis error                              -> error UI + admin re-run
-//   strategist error                             -> error UI + admin re-run
+// UI is a 3-step narrative:
+//   01 (done):     "You submitted your information"
+//   02 (active):   "Two Claude Opus 4.7 agents are working right now"
+//                  with sub-state for Anamnesis + Strategist
+//   03 (pending):  "Your anamnesis and your opportunity radar, ready to read"
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -42,7 +41,12 @@ function formatElapsed(secs: number): string {
 }
 
 type Phase =
-  | { kind: "waiting"; total_elapsed: number; phase_label: string }
+  | {
+      kind: "waiting";
+      total_elapsed: number;
+      anamnesisState: "running" | "done";
+      strategistState: "pending" | "running";
+    }
   | { kind: "done" }
   | { kind: "error"; agent: "anamnesis" | "strategist"; code: string | null };
 
@@ -70,20 +74,15 @@ function computePhase(s: OnboardingStatus): Phase {
   const stElapsed = st?.elapsed_seconds ?? 0;
   const total = aElapsed + stElapsed;
 
-  // Phase 2: anamnesis done, strategist null/pending/running.
-  if (a?.status === "done") {
-    return {
-      kind: "waiting",
-      total_elapsed: total,
-      phase_label: "Comparando com o catalogo",
-    };
-  }
+  const anamnesisDone = a?.status === "done";
+  const strategistRunning =
+    st?.status === "running" || st?.status === "pending";
 
-  // Phase 1: anamnesis null/pending/running.
   return {
     kind: "waiting",
     total_elapsed: total,
-    phase_label: "Lendo seu trabalho",
+    anamnesisState: anamnesisDone ? "done" : "running",
+    strategistState: anamnesisDone && strategistRunning ? "running" : "pending",
   };
 }
 
@@ -100,8 +99,6 @@ function AdminRetryInline({ agent }: { agent: "anamnesis" | "strategist" }) {
       body: JSON.stringify({ force: true }),
     })
       .then(() => {
-        // Stay on /generating; let the poller pick up the new running row
-        // (it polls latest, no run_id needed).
         router.refresh();
       })
       .catch(() => {})
@@ -116,18 +113,212 @@ function AdminRetryInline({ agent }: { agent: "anamnesis" | "strategist" }) {
       disabled={loading}
       style={{ opacity: loading ? 0.5 : 1, marginTop: "1.5rem" }}
     >
-      {loading ? "reenviando..." : `re-run ${agent}`}
+      {loading ? "retrying..." : `re-run ${agent}`}
     </button>
   );
 }
+
+// ── Timeline subcomponents ──────────────────────────────────────────────
+
+type StepState = "done" | "active" | "pending";
+
+function StepMarker({ state }: { state: StepState }) {
+  if (state === "done") {
+    return (
+      <span
+        aria-hidden="true"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "18px",
+          height: "18px",
+          background: "var(--ink)",
+          color: "var(--paper)",
+          borderRadius: "50%",
+          fontSize: "10px",
+          lineHeight: 1,
+          fontFamily: "var(--mono)",
+        }}
+      >
+        ✓
+      </span>
+    );
+  }
+  if (state === "active") {
+    return (
+      <span
+        aria-hidden="true"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "18px",
+          height: "18px",
+          background: "var(--accent)",
+          borderRadius: "50%",
+          position: "relative",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: "50%",
+            background: "var(--accent)",
+            opacity: 0.35,
+            animation: "pulse 1.6s ease-out infinite",
+          }}
+        />
+      </span>
+    );
+  }
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "inline-flex",
+        width: "18px",
+        height: "18px",
+        background: "transparent",
+        border: "1.5px solid var(--ink-4, rgba(26,26,23,0.25))",
+        borderRadius: "50%",
+      }}
+    />
+  );
+}
+
+function AgentRow({
+  state,
+  name,
+  description,
+}: {
+  state: StepState;
+  name: string;
+  description: string;
+}) {
+  const colorMap: Record<StepState, string> = {
+    done: "var(--ink-3)",
+    active: "var(--ink)",
+    pending: "var(--ink-4, rgba(26,26,23,0.45))",
+  };
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "12px",
+        padding: "8px 0",
+      }}
+    >
+      <span style={{ marginTop: "3px", flexShrink: 0 }}>
+        <StepMarker state={state} />
+      </span>
+      <div style={{ minWidth: 0, color: colorMap[state] }}>
+        <div
+          style={{
+            fontFamily: "var(--mono)",
+            fontSize: "12px",
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            marginBottom: "2px",
+          }}
+        >
+          {name}
+        </div>
+        <div
+          style={{
+            fontFamily: "var(--serif)",
+            fontSize: "14px",
+            lineHeight: 1.5,
+          }}
+        >
+          {description}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StepBlock({
+  num,
+  state,
+  title,
+  children,
+}: {
+  num: string;
+  state: StepState;
+  title: string;
+  children?: React.ReactNode;
+}) {
+  const titleColor: Record<StepState, string> = {
+    done: "var(--ink-3)",
+    active: "var(--ink)",
+    pending: "var(--ink-4, rgba(26,26,23,0.45))",
+  };
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "32px 1fr",
+        gap: "16px",
+        alignItems: "start",
+        padding: "12px 0",
+      }}
+    >
+      <span
+        style={{
+          fontFamily: "var(--mono)",
+          fontSize: "11px",
+          letterSpacing: "0.08em",
+          color: state === "active" ? "var(--accent)" : "var(--ink-4, rgba(26,26,23,0.4))",
+          paddingTop: "2px",
+        }}
+      >
+        {num}
+      </span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            fontFamily: "var(--mono)",
+            fontSize: "14px",
+            fontWeight: 700,
+            color: titleColor[state],
+            lineHeight: 1.3,
+          }}
+        >
+          <StepMarker state={state} />
+          <span>{title}</span>
+        </div>
+        {children && (
+          <div
+            style={{
+              paddingLeft: "28px",
+              borderLeft: state === "active"
+                ? "1px solid var(--ink-5, rgba(26,26,23,0.12))"
+                : "none",
+              marginLeft: "8px",
+            }}
+          >
+            {children}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main ────────────────────────────────────────────────────────────────
 
 export default function BothPoller({ isAdmin }: BothPollerProps) {
   const router = useRouter();
 
   const [snapshot, setSnapshot] = useState<OnboardingStatus | null>(null);
   const [pollErr, setPollErr] = useState(false);
-  // Guard: ensure router.push("/report") fires exactly once even if a poll
-  // tick races with the visibility-change handler.
   const redirectedRef = useRef(false);
 
   useEffect(() => {
@@ -182,34 +373,74 @@ export default function BothPoller({ isAdmin }: BothPollerProps) {
     };
   }, [router]);
 
-  // Initial render before first poll resolves: show the same scaffold so
-  // there is no layout flash. The first tick fires immediately on mount.
   const phase: Phase = snapshot
     ? computePhase(snapshot)
-    : { kind: "waiting", total_elapsed: 0, phase_label: "Iniciando" };
+    : {
+        kind: "waiting",
+        total_elapsed: 0,
+        anamnesisState: "running",
+        strategistState: "pending",
+      };
+
+  // Step 02 sub-state: derived from phase.
+  let anamnesisAgent: StepState = "pending";
+  let strategistAgent: StepState = "pending";
+  let step02State: StepState = "active";
+  let step03State: StepState = "pending";
+  let totalElapsed = 0;
+
+  if (phase.kind === "waiting") {
+    totalElapsed = phase.total_elapsed;
+    anamnesisAgent = phase.anamnesisState === "done" ? "done" : "active";
+    strategistAgent = phase.strategistState === "running" ? "active" : "pending";
+    step02State = "active";
+    step03State = "pending";
+  } else if (phase.kind === "done") {
+    anamnesisAgent = "done";
+    strategistAgent = "done";
+    step02State = "done";
+    step03State = "active";
+  } else {
+    // error: keep step 02 visually active and reflect WHICH agent failed
+    // so the timeline matches reality (without this both rows render as
+    // "pending" hollow rings, suggesting neither agent ever started).
+    step02State = "active";
+    if (phase.agent === "anamnesis") {
+      anamnesisAgent = "active";
+      strategistAgent = "pending";
+    } else {
+      // strategist errored: anamnesis must have finished first
+      anamnesisAgent = "done";
+      strategistAgent = "active";
+    }
+  }
 
   const isError = phase.kind === "error";
 
   let statusLine: string;
   if (phase.kind === "done") {
-    statusLine = "PRONTO. REDIRECIONANDO...";
+    statusLine = "READY. REDIRECTING...";
   } else if (phase.kind === "error") {
-    statusLine = `ERRO NO ${phase.agent.toUpperCase()}${
+    statusLine = `ERROR IN ${phase.agent.toUpperCase()}${
       phase.code ? ` · ${phase.code}` : ""
     }`;
   } else {
-    statusLine = `ELAPSED ${formatElapsed(phase.total_elapsed)} · ${phase.phase_label.toUpperCase()} · VERIFICANDO A CADA 10s`;
+    const which =
+      phase.anamnesisState === "done"
+        ? "STRATEGIST RUNNING"
+        : "ANAMNESIS RUNNING";
+    statusLine = `ELAPSED ${formatElapsed(totalElapsed)} · ${which} · CHECKING EVERY 10s`;
   }
 
   return (
     <div
       style={{
         padding: "5rem 1rem",
-        maxWidth: "680px",
+        maxWidth: "720px",
         margin: "0 auto",
         display: "flex",
         flexDirection: "column",
-        gap: "1.25rem",
+        gap: "1.75rem",
       }}
     >
       {/* Eyebrow */}
@@ -222,65 +453,95 @@ export default function BothPoller({ isAdmin }: BothPollerProps) {
           color: "var(--ink-3)",
         }}
       >
-        ETAPA · 02 / GENERATING
+        STEP · 02 / GENERATING
       </div>
 
-      {/* Hero */}
+      {/* Hero — emphasize the time */}
       <h1
         style={{
           fontFamily: "var(--mono)",
-          fontSize: "clamp(22px, 4vw, 32px)",
+          fontSize: "clamp(28px, 5vw, 44px)",
           fontWeight: 700,
-          lineHeight: 1.15,
+          lineHeight: 1.1,
           margin: 0,
           color: "var(--ink)",
+          letterSpacing: "-0.01em",
         }}
       >
-        Preparando seu radar.
-        <span
-          style={{
-            display: "inline-block",
-            width: ".45em",
-            height: ".75em",
-            background: "var(--accent)",
-            marginLeft: ".08em",
-            verticalAlign: "-.05em",
-            animation: "blink 1.05s steps(1) infinite",
-          }}
-          aria-hidden="true"
-        />
+        This will take up to 10 minutes.
       </h1>
 
-      {/* Body */}
       <p
         style={{
           fontFamily: "var(--serif)",
-          fontSize: "16px",
+          fontSize: "17px",
           lineHeight: 1.55,
           color: "var(--ink-2)",
           margin: 0,
         }}
       >
-        Claude Opus 4.7 esta lendo seu GitHub, seu CV, o momento que voce
-        descreveu, e em seguida pesando sua trajetoria contra cada
-        oportunidade do catalogo. Sao dois agentes em sequencia.
+        You can close this tab. We will email you the moment it is ready.
+        Results persist.
       </p>
 
-      {/* Time + persistence note */}
+      {/* Timeline */}
       <div
         style={{
-          fontFamily: "var(--mono)",
-          fontSize: "11px",
-          letterSpacing: "0.05em",
-          color: "var(--ink-3)",
-          lineHeight: 1.7,
+          marginTop: "1rem",
+          borderTop: "0.5px solid var(--ink-5, rgba(26,26,23,0.15))",
         }}
       >
-        Isso pode levar ate 10 minutos.
-        <br />
-        Voce pode fechar esta aba, os resultados persistem.
-        <br />
-        Te avisamos por email quando estiver pronto.
+        <StepBlock
+          num="01"
+          state="done"
+          title="You submitted your information."
+        />
+        <div
+          style={{
+            borderTop: "0.5px solid var(--ink-5, rgba(26,26,23,0.15))",
+          }}
+        />
+        <StepBlock
+          num="02"
+          state={step02State}
+          title="Two Claude Opus 4.7 agents are working right now."
+        >
+          <AgentRow
+            state={anamnesisAgent}
+            name="Anamnesis"
+            description={
+              anamnesisAgent === "done"
+                ? "Read your GitHub, your CV, and the moment you described."
+                : "Reading your GitHub, your CV, and the moment you described, in depth."
+            }
+          />
+          <AgentRow
+            state={strategistAgent}
+            name="Strategist"
+            description={
+              strategistAgent === "active"
+                ? "Comparing your trajectory against every opportunity in the catalog."
+                : strategistAgent === "done"
+                  ? "Compared your trajectory with the catalog and ranked everything."
+                  : "Waiting for Anamnesis to finish before it starts."
+            }
+          />
+        </StepBlock>
+        <div
+          style={{
+            borderTop: "0.5px solid var(--ink-5, rgba(26,26,23,0.15))",
+          }}
+        />
+        <StepBlock
+          num="03"
+          state={step03State}
+          title="Your anamnesis and your opportunity radar, ready to read."
+        />
+        <div
+          style={{
+            borderTop: "0.5px solid var(--ink-5, rgba(26,26,23,0.15))",
+          }}
+        />
       </div>
 
       {/* Error banner */}
@@ -296,15 +557,15 @@ export default function BothPoller({ isAdmin }: BothPollerProps) {
             lineHeight: 1.5,
           }}
         >
-          O agente {phase.agent} encerrou de forma inesperada.
-          {phase.code && ` Codigo: ${phase.code}.`}{" "}
+          The {phase.agent} agent ended unexpectedly.
+          {phase.code && ` Code: ${phase.code}.`}{" "}
           {isAdmin
-            ? "Use o botao abaixo para tentar de novo."
-            : "Tente novamente em alguns minutos ou contate o suporte."}
+            ? "Use the button below to try again."
+            : "Try again in a few minutes or contact support."}
         </div>
       )}
 
-      {/* Network/poll error (non-fatal: keeps trying) */}
+      {/* Network/poll error (non-fatal) */}
       {pollErr && phase.kind !== "error" && (
         <div
           style={{
@@ -314,11 +575,11 @@ export default function BothPoller({ isAdmin }: BothPollerProps) {
             color: "var(--ink-3)",
           }}
         >
-          Sem conexao com o servidor agora. Tentando de novo em 10s.
+          No connection to the server right now. Retrying in 10s.
         </div>
       )}
 
-      {/* Live status line */}
+      {/* Status line */}
       <div
         style={{
           fontFamily: "var(--mono)",
@@ -326,15 +587,12 @@ export default function BothPoller({ isAdmin }: BothPollerProps) {
           letterSpacing: "0.07em",
           color: isError ? "var(--accent)" : "var(--ink-3)",
           textTransform: "uppercase",
-          borderTop: "0.5px solid var(--ink-5, rgba(26,26,23,0.15))",
-          paddingTop: "1rem",
-          marginTop: "0.5rem",
+          paddingTop: "0.5rem",
         }}
       >
         {statusLine}
       </div>
 
-      {/* Admin retry */}
       {isAdmin && phase.kind === "error" && (
         <AdminRetryInline agent={phase.agent} />
       )}
