@@ -117,7 +117,7 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
         const message =
           data && typeof data === "object" && "message" in data
             ? String((data as Record<string, unknown>).message)
-            : "Falha ao carregar as perguntas. Tente novamente.";
+            : "Failed to load the questions. Please try again.";
         setState({ kind: "error", message });
         return;
       }
@@ -130,21 +130,21 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
           ? String((data as Record<string, unknown>).ai_error)
           : undefined;
       if (!Array.isArray(rawQuestions)) {
-        setState({ kind: "error", message: "Resposta invalida do servidor." });
+        setState({ kind: "error", message: "Invalid response from the server." });
         return;
       }
       const questions = rawQuestions.filter(isQuestion);
       if (questions.length === 0) {
         setState({
           kind: "error",
-          message: "Nenhuma pergunta foi gerada. Tente regenerar.",
+          message: "No questions were generated. Try regenerating.",
         });
         return;
       }
       if (regenerate) setAnswers({});
       setState({ kind: "ready", questions, aiError });
     } catch {
-      setState({ kind: "error", message: "Erro de rede. Tente novamente." });
+      setState({ kind: "error", message: "Network error. Please try again." });
     } finally {
       setRegenerating(false);
     }
@@ -239,7 +239,7 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
       });
       if (!res.ok) {
         setSubmitting(false);
-        setSubmitErr("Nao foi possivel salvar suas respostas. Tente novamente.");
+        setSubmitErr("Could not save your answers. Please try again.");
         return;
       }
       await res.json().catch(() => null);
@@ -247,7 +247,7 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
       router.push("/generating?step=both");
     } catch {
       setSubmitting(false);
-      setSubmitErr("Erro de rede. Tente novamente.");
+      setSubmitErr("Network error. Please try again.");
     }
   };
 
@@ -263,13 +263,13 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
         }}
       >
         <div className="input-hd">
-          <span>Preparando suas perguntas</span>
-          <span className="status pending">a IA esta lendo seus inputs</span>
+          <span>Preparing your questions</span>
+          <span className="status pending">the AI is reading your inputs</span>
         </div>
         <p className="input-hint">
-          {firstName}, isso leva uns segundos. Estamos pedindo para o Claude
-          olhar seu GitHub e o que voce escreveu, e propor follow-ups
-          personalizados. As perguntas de constraints sao fixas.
+          {firstName}, this takes a few seconds. We are asking Claude to
+          look at your GitHub and what you wrote, and propose personalized
+          follow-ups. The constraint questions are fixed.
         </p>
         <div
           aria-hidden="true"
@@ -291,8 +291,8 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
     return (
       <div className="input-block" style={{ marginTop: 24 }}>
         <div className="input-hd">
-          <span>Algo deu errado</span>
-          <span className="status pending">erro ao gerar</span>
+          <span>Something went wrong</span>
+          <span className="status pending">generation error</span>
         </div>
         <p className="input-hint">{state.message}</p>
         <div style={{ marginTop: 16, display: "flex", gap: 12 }}>
@@ -302,7 +302,7 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
             style={{ cursor: "pointer" }}
             onClick={() => loadQuestions(true)}
           >
-            Tentar de novo
+            Try again
             <span className="cur"></span>
           </button>
           <button
@@ -312,7 +312,7 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
             onClick={() => submit(true)}
             disabled={submitting}
           >
-            Pular esta etapa
+            Skip this step
           </button>
         </div>
       </div>
@@ -432,9 +432,9 @@ function ClarifyBody({
             fontFamily: "var(--mono)",
           }}
         >
-          A IA nao conseguiu propor follow-ups personalizados desta vez. As
-          perguntas de constraint abaixo ja sao suficientes para um relatorio
-          decente; voce pode regenerar ou seguir.
+          The AI could not propose personalized follow-ups this time. The
+          constraint questions below are enough for a decent report; you
+          can regenerate or proceed.
         </div>
       )}
 
@@ -443,8 +443,8 @@ function ClarifyBody({
 
       <SectionHeader
         n="A"
-        title="Constraints e ambicao"
-        sub="Perguntas fixas. Definem o universo de oportunidades que faz sentido para voce."
+        title="Constraints and ambition"
+        sub="Fixed questions. They define the universe of opportunities that make sense for you."
       />
       {eliminatory.map((q, i) => (
         <QuestionRow
@@ -463,8 +463,8 @@ function ClarifyBody({
       {ai.length > 0 && (
         <SectionHeader
           n="B"
-          title={`Personalizadas para ${firstName}`}
-          sub="A IA olhou seus sinais e escolheu o que vale a pena confirmar antes do relatorio."
+          title={`Personalized for ${firstName}`}
+          sub="The AI looked at your signals and picked what is worth confirming before the report."
         />
       )}
       {ai.map((q, i) => (
@@ -500,7 +500,7 @@ function ClarifyBody({
           disabled={submitting}
           onClick={onContinue}
         >
-          <span className="hi">C</span>ontinuar para o relatorio
+          <span className="hi">C</span>ontinue to the report
           <span className="cur"></span>
         </button>
         <button
@@ -510,7 +510,7 @@ function ClarifyBody({
           disabled={submitting}
           onClick={onSkip}
         >
-          Pular e gerar mesmo assim
+          Skip and generate anyway
         </button>
         <button
           type="button"
@@ -518,9 +518,9 @@ function ClarifyBody({
           style={{ cursor: regenerating ? "not-allowed" : "pointer" }}
           disabled={regenerating || submitting}
           onClick={onRegenerate}
-          title="Regerar as perguntas personalizadas"
+          title="Regenerate the personalized questions"
         >
-          {regenerating ? "regenerando..." : "regerar IA"}
+          {regenerating ? "regenerating..." : "regenerate AI"}
         </button>
         <span
           style={{
@@ -531,7 +531,7 @@ function ClarifyBody({
             textTransform: "uppercase",
           }}
         >
-          {answered} / {total} respondidas
+          {answered} / {total} answered
         </span>
       </div>
       {submitErr && (
@@ -574,10 +574,10 @@ function ProgressStrip({
           textTransform: "uppercase",
         }}
       >
-        <span>progresso</span>
+        <span>progress</span>
         <span>
-          {String(answered).padStart(2, "0")} de {String(total).padStart(2, "0")}{" "}
-          respondidas
+          {String(answered).padStart(2, "0")} of {String(total).padStart(2, "0")}{" "}
+          answered
         </span>
       </div>
       <div
@@ -670,7 +670,7 @@ function QuestionRow({
           {q.question}
         </span>
         <span className={"status " + (answered ? "ok" : "")}>
-          {q.source === "eliminatory" ? "constraint" : "personalizada"}
+          {q.source === "eliminatory" ? "constraint" : "personalized"}
         </span>
       </div>
       {q.grounding && (
@@ -690,7 +690,7 @@ function QuestionRow({
             wordBreak: "break-word",
           }}
         >
-          porque {q.grounding}
+          because {q.grounding}
         </div>
       )}
       <p className="input-hint">{q.context}</p>
@@ -779,7 +779,7 @@ function ChipGroup({
           >
             {answer.otherEnabled && <span className="tick"></span>}
             <span style={{ textTransform: "none", letterSpacing: 0 }}>
-              {answer.otherEnabled ? "outro" : "+ outro"}
+              {answer.otherEnabled ? "other" : "+ other"}
             </span>
           </button>
         )}
@@ -787,7 +787,7 @@ function ChipGroup({
       {q.allow_other && answer.otherEnabled && (
         <input
           className="field"
-          placeholder="conte aqui em uma frase"
+          placeholder="tell us in one sentence"
           value={answer.otherText}
           maxLength={OTHER_TEXT_MAX}
           disabled={submitting}
@@ -797,7 +797,7 @@ function ChipGroup({
       )}
       {q.max_select ? (
         <p className="input-hint" style={{ marginTop: 6 }}>
-          escolha ate {q.max_select}.
+          pick up to {q.max_select}.
         </p>
       ) : null}
     </>
@@ -816,7 +816,7 @@ type PreviewModalProps = {
 };
 
 function summarizeAnswer(q: Question, a: AnswerState | undefined): string {
-  if (!a) return "(sem resposta)";
+  if (!a) return "(no answer)";
   const optByValue = new Map((q.options ?? []).map((o) => [o.value, o.label]));
   const labels = a.values
     .map((v) => optByValue.get(v))
@@ -824,9 +824,9 @@ function summarizeAnswer(q: Question, a: AnswerState | undefined): string {
   const otherText = a.otherEnabled ? a.otherText.trim() : "";
   const parts: string[] = [];
   if (labels.length > 0) parts.push(labels.join(", "));
-  if (otherText) parts.push(`outro: ${otherText}`);
+  if (otherText) parts.push(`other: ${otherText}`);
   if (q.kind === "short_text" && otherText) return otherText;
-  if (parts.length === 0) return "(sem resposta)";
+  if (parts.length === 0) return "(no answer)";
   return parts.join(" · ");
 }
 
@@ -874,16 +874,15 @@ function PreviewModal({
         style={{ maxHeight: "84vh", overflow: "auto" }}
       >
         <div className="ana-modal-kicker">
-          § preview · o que a Anamnesis e o Strategist vao considerar
+          § preview · what Anamnesis and the Strategist will consider
         </div>
         <h3 className="ana-modal-h">
-          Tudo certo, {firstName}?
+          All set, {firstName}?
         </h3>
         <p className="ana-modal-body">
-          Confirme as respostas abaixo. Anamnesis vai usar isso como
-          autoridade sobre seu CV e GitHub. O Strategist vai filtrar
-          oportunidades incompativeis antes de rankear. Voltar pra editar
-          custa zero.
+          Confirm the answers below. Anamnesis will treat them as authority
+          over your CV and GitHub. The Strategist will filter incompatible
+          opportunities before ranking. Going back to edit costs nothing.
         </p>
         <ul className="ana-modal-list" style={{ paddingLeft: 0, listStyle: "none" }}>
           {questions.map((q) => {
@@ -918,7 +917,7 @@ function PreviewModal({
                       textTransform: "uppercase",
                     }}
                   >
-                    {q.source === "eliminatory" ? "constraint" : "personalizada"}
+                    {q.source === "eliminatory" ? "constraint" : "personalized"}
                     {" · "}
                     {q.category.replace(/_/g, " ")}
                   </div>
@@ -950,8 +949,8 @@ function PreviewModal({
               textTransform: "uppercase",
             }}
           >
-            {unanswered} {unanswered === 1 ? "pergunta" : "perguntas"} sem
-            resposta. Tudo bem seguir, mas a Anamnesis tera menos contexto.
+            {unanswered} {unanswered === 1 ? "question" : "questions"} left
+            unanswered. It is fine to continue, but Anamnesis will have less context.
           </div>
         )}
         <div className="ana-modal-actions">
@@ -961,7 +960,7 @@ function PreviewModal({
             onClick={onCancel}
             disabled={submitting}
           >
-            Editar respostas
+            Edit answers
           </button>
           <button
             type="button"
@@ -969,7 +968,7 @@ function PreviewModal({
             onClick={onConfirm}
             disabled={submitting}
           >
-            Confirmar e gerar
+            Confirm and generate
             <span className="cur"></span>
           </button>
         </div>

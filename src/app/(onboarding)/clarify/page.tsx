@@ -46,9 +46,9 @@ export default async function ClarifyPage() {
             <span className="bar"></span>
           </div>
           <h1>
-            Antes da Anamnesis ler tudo,
+            Before Anamnesis reads everything,
             <br />
-            algumas confirmacoes
+            a few confirmations
             <span
               style={{
                 display: "inline-block",
@@ -62,24 +62,23 @@ export default async function ClarifyPage() {
             ></span>
           </h1>
           <p className="lede">
-            {firstName}, com base no seu GitHub e no que voce escreveu, a IA
-            preparou de tres a cinco perguntas curtas. Sao confirmacoes
-            simples sobre cargo, tempo em cada lugar, e o que voce esta
-            fazendo agora. Quanto mais preciso, menos a Anamnesis chuta.
+            {firstName}, based on your GitHub and what you wrote, the AI
+            prepared a short set of questions. Simple confirmations about
+            role, time at each place, and what you are doing now. The more
+            precise, the less Anamnesis has to guess.
           </p>
           <ClarifyForm firstName={firstName} />
         </div>
 
         <aside className="ana-confirm">
-          <h2>Por que isso?</h2>
-          <p className="eye">A diferenca entre achar e saber.</p>
+          <h2>Why this?</h2>
+          <p className="eye">The difference between guessing and knowing.</p>
           <div className="prose" style={{ marginTop: 12 }}>
-            CV e GitHub mostram o que voce publicou. Nao mostram quanto tempo
-            voce ficou em cada lugar, qual era seu papel real, ou se aquele
-            repo com 800 stars era um trabalho ou um projeto de fim de
-            semana. Sem essas pistas, a Anamnesis preenche os buracos com
-            inferencia. Esta etapa fecha esses buracos antes do relatorio ser
-            escrito.
+            CV and GitHub show what you shipped. They do not show how long
+            you spent at each place, what your real role was, or whether
+            that 800-star repo was a job or a weekend project. Without
+            those signals, Anamnesis fills the gaps with inference. This
+            step closes those gaps before the report is written.
           </div>
           <div className="prof" style={{ marginTop: 18 }}>
             <div>
