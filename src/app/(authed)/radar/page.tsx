@@ -6,7 +6,6 @@ import { redirect } from "next/navigation";
 import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import OppCardLink from "@/components/cards/OppCardLink";
-import StrategistAutoRunner from "@/components/StrategistAutoRunner";
 import AdminRerunButton from "@/components/AdminRerunButton";
 import { getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
@@ -144,7 +143,19 @@ export default async function DashboardPage() {
 
   const currentAnamnesisRunId = profile?.anamnesis_run_id ?? null;
   const strategistState = computeStrategistState(stratRun, currentAnamnesisRunId);
-  const picksMap = buildPicksMap(stratRun);
+
+  // Delegate the wait UX to /generating for all in-progress states.
+  if (
+    strategistState === "fresh" ||
+    strategistState === "stale" ||
+    strategistState === "running"
+  ) {
+    redirect("/generating?step=strategist");
+  }
+
+  // State is "ready" or "error" from here on.
+  const picksMap = strategistState === "ready" ? buildPicksMap(stratRun) : new Map();
+  const showError = strategistState === "error";
   const isAdmin = isAdminProfile(profile);
 
   const plan = extractPlan(stratRun);
@@ -156,14 +167,14 @@ export default async function DashboardPage() {
   // Re-rank: Strategist picks first (by rank_in_section), non-picks after (by seed fit DESC).
   function rerank(items: Opportunity[]): Opportunity[] {
     const picked = items
-      .filter((o) => picksMap.has(o.id))
+      .filter((o) => (picksMap as Map<string, unknown>).has(o.id))
       .sort((a, b) => {
-        const ra = picksMap.get(a.id)!.rank_in_section;
-        const rb = picksMap.get(b.id)!.rank_in_section;
+        const ra = (picksMap as ReturnType<typeof buildPicksMap>).get(a.id)!.rank_in_section;
+        const rb = (picksMap as ReturnType<typeof buildPicksMap>).get(b.id)!.rank_in_section;
         return ra - rb;
       });
     const unpicked = items
-      .filter((o) => !picksMap.has(o.id))
+      .filter((o) => !(picksMap as Map<string, unknown>).has(o.id))
       .sort((a, b) => (b.fit ?? 0) - (a.fit ?? 0));
     return [...picked, ...unpicked];
   }
@@ -172,11 +183,6 @@ export default async function DashboardPage() {
     cat: c,
     items: rerank(opps.filter((o) => o.category === c.id)),
   })).filter((g) => g.items.length > 0);
-
-  const generating =
-    strategistState === "fresh" ||
-    strategistState === "stale" ||
-    strategistState === "running";
 
   return (
     <div className="wrap">
@@ -189,11 +195,6 @@ export default async function DashboardPage() {
         intakeSubmitted={true}
         onboardComplete={true}
       />
-
-      {/* Auto-trigger on fresh/stale; not on running (already in progress), error, or ready. */}
-      {(strategistState === "fresh" || strategistState === "stale") && (
-        <StrategistAutoRunner />
-      )}
 
       <div className="dash-hd">
         <div>
@@ -237,156 +238,84 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {generating ? (
-        <div
-          style={{
-            padding: "5rem 1rem",
-            textAlign: "center",
-            borderTop: "1px solid var(--ink-5, rgba(26, 26, 23, 0.12))",
-            borderBottom: "1px solid var(--ink-5, rgba(26, 26, 23, 0.12))",
-            margin: "2rem 0",
-          }}
-        >
-          <div
-            style={{
-              fontFamily: "var(--mono)",
-              fontSize: "11px",
-              color: "var(--ink-3)",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              marginBottom: "1.5rem",
-            }}
-          >
-            Strategist · running
-          </div>
-          <h2
-            style={{
-              fontFamily: "var(--mono)",
-              fontSize: "28px",
-              fontWeight: 700,
-              lineHeight: 1.2,
-              margin: 0,
-              maxWidth: "640px",
-              marginLeft: "auto",
-              marginRight: "auto",
-            }}
-          >
-            Reading your profile, ranking the catalog.
-            <span
-              style={{
-                display: "inline-block",
-                width: ".45em",
-                height: ".75em",
-                background: "var(--accent)",
-                marginLeft: ".08em",
-                verticalAlign: "-.05em",
-                animation: "blink 1.05s steps(1) infinite",
-              }}
-            ></span>
-          </h2>
+      {/* 90-day plan above the filter row */}
+      <div className="plan">
+        <h2>Strategist · 90-day plan</h2>
+        {showError ? (
           <p
-            style={{
-              fontFamily: "var(--serif)",
-              fontSize: "16px",
-              color: "var(--ink-2)",
-              marginTop: "1.25rem",
-              maxWidth: "560px",
-              marginLeft: "auto",
-              marginRight: "auto",
-              lineHeight: 1.5,
-            }}
+            className="sub"
+            style={{ color: "var(--red, #c0392b)" }}
           >
-            Claude Opus 4.7 is weighing your trajectory against each opportunity
-            in this week&apos;s catalog. One pass. Output is a 90-day plan and a
-            fit score grounded in your work.
+            Strategist encountered an error on the last run. Showing catalog without personalized ranking.
           </p>
-          <p
-            style={{
-              fontFamily: "var(--mono)",
-              fontSize: "11px",
-              color: "var(--ink-3)",
-              marginTop: "2rem",
-            }}
-          >
-            About 2 to 3 minutes. You can close this tab, results persist.
+        ) : (
+          <p className="sub">
+            generated {plan.generatedAt} · horizon {plan.horizon}
           </p>
-          {isAdmin && (
-            <div style={{ marginTop: "2rem" }}>
-              <AdminRerunButton />
-            </div>
-          )}
-        </div>
-      ) : (
-        <>
-          {/* 90-day plan above the filter row */}
-          <div className="plan">
-            <h2>Strategist · 90-day plan</h2>
-            <p className="sub">
-              generated {plan.generatedAt} · horizon {plan.horizon}
-            </p>
-            <div className="plan-grid">
-              {plan.tiers.map((tier, i) => (
-                <div key={i} className="plan-col">
-                  <h4>
-                    <span>{tier.label}</span> · {tier.range}
-                  </h4>
-                  <ol>
-                    {tier.items.map((it, j) => (
-                      <li key={j}>
-                        {it.text}
-                        <span className="meta">
-                          {it.meta}
-                          {it.ok && <span className="ok"> · strategist picks</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              ))}
-            </div>
-            {isAdmin && (
-              <div style={{ marginTop: "1rem" }}>
-                <AdminRerunButton />
+        )}
+        {!showError && (
+          <div className="plan-grid">
+            {plan.tiers.map((tier, i) => (
+              <div key={i} className="plan-col">
+                <h4>
+                  <span>{tier.label}</span> · {tier.range}
+                </h4>
+                <ol>
+                  {tier.items.map((it, j) => (
+                    <li key={j}>
+                      {it.text}
+                      <span className="meta">
+                        {it.meta}
+                        {it.ok && <span className="ok"> · strategist picks</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
               </div>
-            )}
+            ))}
           </div>
+        )}
+        {isAdmin && (
+          <div style={{ marginTop: "1rem" }}>
+            <AdminRerunButton />
+          </div>
+        )}
+      </div>
 
-          <div className="filter-row">
-            <button className="pill on" type="button">
-              All <span className="ct">{opps.length}</span>
+      <div className="filter-row">
+        <button className="pill on" type="button">
+          All <span className="ct">{opps.length}</span>
+        </button>
+        {CATS.map((c) => {
+          const n = opps.filter((o) => o.category === c.id).length;
+          return (
+            <button key={c.id} className="pill" type="button">
+              {c.label} <span className="ct">{n}</span>
             </button>
-            {CATS.map((c) => {
-              const n = opps.filter((o) => o.category === c.id).length;
-              return (
-                <button key={c.id} className="pill" type="button">
-                  {c.label} <span className="ct">{n}</span>
-                </button>
-              );
-            })}
-            <span className="spacer"></span>
-            <span className="sort">Sorted by fit · Strategist weighting</span>
-          </div>
+          );
+        })}
+        <span className="spacer"></span>
+        <span className="sort">Sorted by fit · Strategist weighting</span>
+      </div>
 
-          {byCat.map(({ cat, items }) => (
-            <div key={cat.id} className="dash-section">
-              <div className="category-hd">
-                <h3>
-                  <span className="n">/</span>
-                  {cat.label}
-                </h3>
-                <span>
-                  {items.length} · {cat.hint}
-                </span>
-              </div>
-              <div className="grid-3">
-                {items.map((o) => (
-                  <OppCardLink key={o.id} o={o} pick={picksMap.get(o.id)} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </>
-      )}
+      {byCat.map(({ cat, items }) => (
+        <div key={cat.id} className="dash-section">
+          <div className="category-hd">
+            <h3>
+              <span className="n">/</span>
+              {cat.label}
+            </h3>
+            <span>
+              {items.length} · {cat.hint}
+            </span>
+          </div>
+          <div className="grid-3">
+            {items.map((o) => (
+              <OppCardLink key={o.id} o={o} pick={(picksMap as ReturnType<typeof buildPicksMap>).get(o.id)} />
+            ))}
+          </div>
+        </div>
+      ))}
 
       <CornerMeta />
     </div>

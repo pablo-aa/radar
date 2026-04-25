@@ -6,6 +6,7 @@ import { isAdminProfile } from "@/lib/admin";
 import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import RunPoller from "@/components/RunPoller";
+import StrategistDispatcher from "@/components/StrategistDispatcher";
 import type { RunStatus } from "@/lib/supabase/types";
 
 type Step = "anamnesis" | "strategist";
@@ -39,20 +40,40 @@ export default async function GeneratingPage({ searchParams }: PageProps) {
     ? await query.eq("id", runIdParam).maybeSingle()
     : await query.order("started_at", { ascending: false }).limit(1).maybeSingle();
 
+  const isAdmin = isAdminProfile(profile);
+  const onboard = profile?.onboard_state;
+  const handle = profile?.github_handle ?? "";
+
+  // No run row found yet.
   if (!row) {
-    // No run for this step; send back to the appropriate origin.
-    redirect(step === "anamnesis" ? "/intake" : "/radar");
+    if (step === "strategist") {
+      // Dispatch a new strategist run client-side; dispatcher replaces URL with run_id
+      // once the API responds, then RunPoller takes over. No redirect-to-/radar because
+      // /radar now sends fresh/stale users here — looping back would be infinite.
+      return (
+        <div className="wrap">
+          <Appbar
+            route="generating"
+            userInitials={(profile?.display_name ?? handle ?? "").slice(0, 2).toUpperCase() || "PA"}
+            userHandle={handle || "you"}
+            userName={profile?.display_name ?? handle ?? "you"}
+            userCity=""
+            intakeSubmitted={onboard?.intake_done ?? false}
+            onboardComplete={onboard?.report_seen ?? false}
+          />
+          <StrategistDispatcher />
+          <CornerMeta />
+        </div>
+      );
+    }
+    // Anamnesis: user shouldn't land on /generating without submitting intake first.
+    redirect("/intake");
   }
 
   // Server-side redirect when the run is already done (no flash of loading screen).
   if (row.status === "done") {
     redirect(step === "anamnesis" ? "/report" : "/radar");
   }
-
-  const isAdmin = isAdminProfile(profile);
-
-  const onboard = profile?.onboard_state;
-  const handle = profile?.github_handle ?? "";
 
   return (
     <div className="wrap">
