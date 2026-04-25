@@ -18,6 +18,7 @@ import {
   type PicksMap,
   type ScoresMap,
 } from "@/lib/agents/strategist/output-reader";
+import { computeRuleBasedScores } from "@/lib/scoring/rule-based";
 import type {
   Opportunity,
   OpportunityCategory,
@@ -159,8 +160,18 @@ export default async function DashboardPage() {
   // State is "ready" or "error" from here on.
   const picksMap: PicksMap =
     strategistState === "ready" ? buildPicksMap(stratRun) : new Map();
-  const scoresMap: ScoresMap =
+
+  // Bulk score precedence:
+  //   1. Agent-emitted all_scores (Strategist's own bulk scoring; currently
+  //      unused since we ship rule-based, but the hook stays for when an
+  //      LLM scorer is plugged back in).
+  //   2. Deterministic rule-based scoring computed in-process (free, fast).
+  // Picks override scores by id at the OppCard render layer.
+  const agentScoresMap: ScoresMap =
     strategistState === "ready" ? buildScoresMap(stratRun) : new Map();
+  const ruleScoresMap = computeRuleBasedScores(opps, profile);
+  const scoresMap: ScoresMap =
+    agentScoresMap.size > 0 ? agentScoresMap : ruleScoresMap;
   const showError = strategistState === "error";
   const isAdmin = isAdminProfile(profile);
 

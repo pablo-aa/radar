@@ -111,30 +111,7 @@ Simples Nacional, MEI, PJ vs CLT, R$ math, BR tax on USD remittance. When fundin
 
 # Output
 
-Call the \`render_card\` tool once for each item you produce. Call order: all \`dated_one_shot\` cards, then \`recurrent_annual\`, then \`rolling\`, then \`arenas\`, then \`ninety_day_plan\` entries.
-
-After all cards are rendered, your final message MUST contain:
-
-1. A brief \`run_summary\` (1 to 2 sentences).
-2. A bulk-scoring block covering EVERY opportunity in the input list, including the ones you already rendered as full cards. Use this exact format:
-
-\`\`\`
-ALL_SCORES_BEGIN
-[
-  {"opportunity_id": "<id>", "fit_score": <0-100>, "fit_band": "<high|medium|low|exclude>"},
-  ...
-]
-ALL_SCORES_END
-\`\`\`
-
-# fit_band rules
-
-- **high (>= 65)**: strong personalized match. Cite-able from profile.
-- **medium (40 to 64)**: plausible match; user could pursue if they shift focus.
-- **low (20 to 39)**: weak match; user would have to invent fit. Visible but de-emphasized.
-- **exclude (< 20)**: not for this user (eligibility miss, language barrier, location gate, irrelevant focus). Sent to "Outras oportunidades" footer.
-
-Score every single opportunity. The same fit_score you wrote into a full card via render_card MUST appear in this list with the same id. Do not skip any opportunity_id from the input. Output the JSON ONLY between the BEGIN and END markers, valid JSON, no comments.`;
+Instead of returning a JSON blob at the end, call the \`render_card\` tool once for each item you produce. Call it in this order: all \`dated_one_shot\` cards, then \`recurrent_annual\`, then \`rolling\`, then \`arenas\`, then \`ninety_day_plan\` entries. After all cards are rendered, return a brief \`run_summary\` in your final message.`;
 
 /**
  * Builds the user message that carries profile + opportunities for one run.

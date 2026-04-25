@@ -285,13 +285,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // 7. Read the full opportunity catalog. Strategist now scores every
-  //    opportunity (not just top 12) so we send all of them; the catalog is
-  //    small enough (<100 rows) that input-token cost is reasonable.
+  // 7. Read top 12 opportunities by fit. The Strategist agent only writes
+  //    rich cards for the top picks; per-user scoring for the long tail
+  //    (the other ~86 opportunities in the catalog) is handled by the
+  //    deterministic rule-based scorer in /radar so we do not pay LLM
+  //    tokens for those scores. See src/lib/scoring/rule-based.ts.
   const oppsRead = await admin
     .from("opportunities")
     .select("*")
-    .order("fit", { ascending: false, nullsFirst: false });
+    .order("fit", { ascending: false, nullsFirst: false })
+    .limit(12);
 
   if (oppsRead.error) {
     console.error(
