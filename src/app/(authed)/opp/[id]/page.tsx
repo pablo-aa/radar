@@ -8,6 +8,7 @@ import {
   buildPicksMap,
 } from "@/lib/agents/strategist/output-reader";
 import type { Opportunity, StrategistRun } from "@/lib/supabase/types";
+import { displayOrDash } from "@/lib/format";
 
 type DeepData = {
   why?: string;
@@ -109,15 +110,15 @@ export default async function OpportunityDetailPage({
             <div className="keyfacts">
               <div className="cell">
                 <div className="k">Deadline</div>
-                <div className="v">{o.deadline ?? "—"}</div>
+                <div className="v">{displayOrDash(o.deadline)}</div>
               </div>
               <div className="cell">
                 <div className="k">Funding</div>
-                <div className="v">{o.funding_brl ?? "—"}</div>
+                <div className="v">{displayOrDash(o.funding_brl)}</div>
               </div>
               <div className="cell">
                 <div className="k">Commitment</div>
-                <div className="v">{o.commitment ?? "—"}</div>
+                <div className="v">{displayOrDash(o.commitment)}</div>
               </div>
             </div>
           </div>

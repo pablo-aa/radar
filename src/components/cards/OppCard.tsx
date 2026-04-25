@@ -1,5 +1,6 @@
 import type { Opportunity } from "@/lib/supabase/types";
 import type { PickOverride } from "@/lib/agents/strategist/output-reader";
+import { displayOrDash } from "@/lib/format";
 
 function truncate(s: string, n: number) {
   return s.length > n ? s.slice(0, n).trim() + "…" : s;
@@ -41,9 +42,9 @@ export default function OppCard({
       </div>
       <dl>
         <dt>Deadline</dt>
-        <dd>{o.deadline ?? "—"}</dd>
+        <dd>{displayOrDash(o.deadline)}</dd>
         <dt>Funding</dt>
-        <dd>{o.funding_brl ?? "—"}</dd>
+        <dd>{displayOrDash(o.funding_brl)}</dd>
       </dl>
       <div className="why">
         <span className="tag">Why you · Strategist</span>
