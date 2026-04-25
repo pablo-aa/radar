@@ -2,6 +2,7 @@ import "server-only";
 
 /* global Buffer */
 
+import { jsonrepair } from "jsonrepair";
 import { getAnthropicClient } from "@/lib/agents/strategist/client";
 import { computeCostUsd } from "@/lib/agents/strategist/pricing";
 import { ANAMNESIS_SYSTEM_PROMPT, buildUserMessage } from "./prompt";
@@ -120,16 +121,30 @@ function stripFences(raw: string): string {
   return candidate;
 }
 
+/**
+ * Parse JSON with a jsonrepair fallback. LLM-generated JSON occasionally
+ * has unescaped quotes, trailing commas, or other minor malformations that
+ * crash JSON.parse but jsonrepair handles. We try the strict parser first
+ * (fast path), then fall back to repair-then-parse.
+ */
+function parseLLMJson(cleaned: string): unknown {
+  try {
+    return JSON.parse(cleaned);
+  } catch (strictErr) {
+    try {
+      const repaired = jsonrepair(cleaned);
+      return JSON.parse(repaired);
+    } catch (repairErr) {
+      throw new Error(
+        `Anamnesis agent returned non-JSON final response. Strict parse: ${String(strictErr)}. Repair attempt: ${String(repairErr)}.`,
+      );
+    }
+  }
+}
+
 function parseProfileJson(raw: string): AnamnesisProfile {
   const cleaned = stripFences(raw);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(
-      `Anamnesis agent returned non-JSON final response: ${String(err)}`,
-    );
-  }
+  const parsed = parseLLMJson(cleaned);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Anamnesis agent final response was not a JSON object.");
   }
@@ -191,14 +206,7 @@ function parseProfileJson(raw: string): AnamnesisProfile {
 
 function parseReportJson(raw: string): AnamnesisReport {
   const cleaned = stripFences(raw);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(
-      `Anamnesis agent returned non-JSON for report: ${String(err)}`,
-    );
-  }
+  const parsed = parseLLMJson(cleaned);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Anamnesis agent report was not a JSON object.");
   }
