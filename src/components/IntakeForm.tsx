@@ -199,15 +199,14 @@ export default function IntakeForm({
         return;
       }
 
-      // The intake/submit response includes the anamnesis run_id but the
-      // chained-flow waiting screen (/generating?step=both) polls the
-      // aggregated /api/onboarding/status endpoint, which finds the latest
-      // run by user_id. So we do not need run_id in the URL.
+      // The intake submission now stops at "persisted". Anamnesis is not
+      // yet dispatched. Send the user to /clarify, where an AI-generated
+      // set of personalized clarification questions waits for them. Once
+      // they answer (or skip), /clarify will dispatch the Anamnesis ->
+      // Strategist chain and route them onward to /generating.
       await res.json().catch(() => null);
-      // Reset submitting before navigation so the button is not stuck if the
-      // user soft-navigates back (Next router keeps the form mounted).
       setSubmitting(false);
-      router.push("/generating?step=both");
+      router.push("/clarify");
     } catch {
       setSubmitting(false);
       setSubmitErr("Erro de rede. Tente novamente.");

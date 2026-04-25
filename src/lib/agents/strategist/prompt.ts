@@ -98,6 +98,56 @@ If fewer than the max actually fit the user, return fewer. Quality over quantity
 6. **If user lacks a prerequisite**, flag it honestly. Example: "Fundacao Estudar values a strong 'return to Brazil' narrative. You don't have this articulated yet. Build it via X before applying."
 7. **90-day plan must be specific and sequenced.** Concrete actions. No "learn more about X". Each action must unlock one of the opportunities/arenas above.
 
+# clarify_answers — hard constraints, ambition, and intensity
+
+The user_profile JSON includes \`structured_profile.clarify_answers\` (and possibly \`structured_profile.clarify_skipped\`). When present, treat these as **filtering AND ranking signals**, not soft hints.
+
+Each entry has this shape:
+
+  {
+    "question_id": "relocate_window",
+    "question": "Voce mudaria de cidade?",
+    "category": "intensity" | "role_precision" | "disambiguation" | "status" | "constraint" | "ambition" | "time_budget" | "language",
+    "kind": "single_choice" | "multi_choice" | "scale" | "short_text",
+    "source": "eliminatory" | "ai_generated",
+    "selected_values": ["no"],
+    "selected_labels": ["nao, fico onde estou"],
+    "other_text": null
+  }
+
+## Precedence
+
+Hard filters DROP first; then rank survivors by fit (rule 1 above). A DROPPED card MUST NOT appear in any of the four lists, MUST NOT appear in ALL_SCORES, and MUST NOT be cited in run_summary. If a question's selected_values is an empty array AND other_text is empty, that answer is unconstrained — apply no filter for it.
+
+## Hard filters (eliminatory category answers)
+
+These come from category="constraint", category="time_budget", or category="ambition". Apply only when the answer's selected_values is non-empty.
+
+1. **relocate_window** = "no" => DROP only when an opportunity REQUIRES physical presence in a city the user does not live in. Signals that REQUIRE presence: \`location_req\` says "presencial" / "on-site" / "in-person" / a city name with "obrigatorio"; OR \`commitment\` says "presencial" / "on-site". Signals that NEGATE presence (KEEP the card): \`commitment\` contains "remote" / "online" / "hibrido" / "distancia" / "virtual"; \`location_req\` says "remote" / "qualquer lugar" / "any". A \`loc\` city alone (without "presencial obrigatorio") is NOT enough to DROP.
+2. **relocate_window** = "yes_intl_only" => DROP only when relocation inside Brasil to a different state is REQUIRED and the city is not the user's. Same KEEP signals as rule 1.
+3. **relocate_window** = "yes_specific_cities" => Same as rule 1, but DROP unless the required city matches one in the user's other_text.
+4. **leave_job** = "no_keeping_job" => DROP only full-time fellowships / accelerators where \`commitment\` says "full-time" or "dedicacao integral" or "leave your job". KEEP anything that does not specify or that says "part-time" / "remote" / "evenings" / "10h/sem" / unrestricted.
+5. **leave_job** = "only_part_time" => Same as rule 4; only part-time-compatible.
+6. **study_appetite** = "no_thanks" => DOWNGRADE fit_score by 15 (do NOT auto-DROP) for academic-pure scholarships (Fulbright, Capes, DAAD, MEXT). For programs that bundle a degree but are leadership / network / policy first (Chevening, Lemann, Schwarzman), KEEP at full score and frame in \`why_you\` as "the degree is a side-effect of the leadership program". Surface academic-pure cards only if nothing better fits.
+7. **study_appetite** = "already_doing" => DROP entry-level scholarships only (master's first-year aimed at undergrads). OK to suggest post-doc / late-stage academic.
+8. **time_budget** = "lt_5" => DROP full-time accelerators and fellowships ONLY when the program explicitly states full-time. Otherwise KEEP and prefer arenas, rolling lightweight programs, and events.
+9. **time_budget** = "5_15" => Same as rule 8, plus prefer arenas and recurrent_annual cards with light prep.
+10. **ambition_vector** ANCHORS the run when selected_values is non-empty. Every surfaced card SHOULD map to at least one selected ambition label. A card that does NOT map may still be surfaced if it is the user's strongest unrelated fit, but \`why_you\` MUST explain the tradeoff. If selected_values is empty AND other_text is empty, treat ambition as unconstrained: skip the anchor entirely.
+
+## Soft signals (ai_generated category answers)
+
+These come from category="intensity", "role_precision", "disambiguation", "status", or "language". Never DROP because of these — they shape \`why_you\` and \`fit_score\`.
+
+11. **intensity** answers OVERRIDE the assumption that a public org / repo is the user's primary work. If selected_labels contain "< 2h" or "2 a 5h", do NOT use that org as evidence in \`why_you\` for a high-fit ranking. Treat as side commitment.
+12. **role_precision** answers correct the user's role. If the user said "voluntario" at $org, do NOT pitch fellowships that target executives or founders of $org.
+13. **disambiguation** answers (job vs side vs hackathon vs study) shape what counts as a real prerequisite. A "hackathon" repo does not satisfy "5 years building production ML systems".
+14. **status** answers describe current employment / study reality. Use to flag mismatches with \`prep_required\`.
+15. **language** answers shape vector framing, not filtering. If the user said "leio melhor que falo", prefer programs whose application is written and avoid live-pitch-heavy ones in \`why_you\` framing, but do NOT DROP English-language programs.
+
+## Skipped path
+
+If \`clarify_skipped: true\` is also present and clarify_answers is empty, do NOT apply the hard filters above. Fall back to inference from the rest of the profile. You MUST then lower every emitted \`fit_score\` by exactly 5 points (clamped to >= 0) and prepend "user opted out of clarifications, fit confidence is reduced" to \`run_summary\`. This is non-negotiable.
+
 # BR context you understand
 
 Simples Nacional, MEI, PJ vs CLT, R$ math, BR tax on USD remittance. When funding is USD, convert at approximately R$ 5.20/USD. When a program requires BR residency/citizenship, enforce it. When it's BR-state-specific (e.g., Cocreation Lab DF requires DF residency), enforce it.
