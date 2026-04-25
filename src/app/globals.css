@@ -170,6 +170,22 @@ body::before{
 .appbar nav a .n{ color:var(--ink-4); margin-right:6px }
 .appbar nav a.on .n{ color:var(--accent) }
 
+/* nudge dot: small accent indicator after a nav label, e.g. "02 Radar •" */
+.appbar-nudge-dot{
+  display:inline-block;
+  width:6px; height:6px; border-radius:50%;
+  background:var(--accent);
+  margin-left:8px;
+  vertical-align: middle; transform: translateY(-1px);
+}
+/* In the mobile drawer, the dot sits inside a flex row (.appbar-drawer-it
+ * has gap+align-items:center), which makes vertical-align/transform a no-op
+ * and causes the gap to add extra space before the dot. Reset both. */
+.appbar-drawer-it .appbar-nudge-dot{
+  margin-left: 0;
+  transform: none;
+}
+
 .appbar .who{
   display:inline-flex; align-items:center; gap:10px;
   color:var(--ink);

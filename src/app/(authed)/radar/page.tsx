@@ -7,6 +7,7 @@ import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import OppCardLink from "@/components/cards/OppCardLink";
 import AdminRerunButton from "@/components/AdminRerunButton";
+import ClearRadarNudge from "@/components/ClearRadarNudge";
 import { getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { isAdminProfile } from "@/lib/admin";
@@ -399,6 +400,7 @@ export default async function DashboardPage() {
         </div>
       )}
 
+      <ClearRadarNudge />
       <CornerMeta />
     </div>
   );

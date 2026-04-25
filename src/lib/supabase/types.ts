@@ -9,6 +9,10 @@ export type OnboardState = {
   intake_done: boolean;
   report_seen: boolean;
   runs_used: number;
+  // Optional: indicates the user has just finished /report and a /radar nav
+  // dot indicator should be shown. Cleared on first /radar visit. Optional
+  // because pre-existing onboard_state rows do not have it.
+  radar_nudged?: boolean;
 };
 
 export type OpportunityCategory =

@@ -33,6 +33,10 @@ type AppbarProps = {
   userCity?: string;
   intakeSubmitted?: boolean;
   onboardComplete?: boolean;
+  // When true, render a small accent-colored dot on the "02 Radar" nav item
+  // so a first-time post-report user notices that the radar is the next
+  // step. Cleared by ClearRadarNudge on first /radar mount.
+  radarNudge?: boolean;
 };
 
 export default function Appbar({
@@ -43,6 +47,7 @@ export default function Appbar({
   userCity = "São Paulo, BR",
   intakeSubmitted = false,
   onboardComplete = false,
+  radarNudge = false,
 }: AppbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -104,6 +109,13 @@ export default function Appbar({
           {showRadar && (
             <Link className={on("group:radar")} href="/radar">
               <span className="n">02</span>Radar
+              {radarNudge && onboardComplete && (
+                <span
+                  className="appbar-nudge-dot"
+                  aria-label="new"
+                  title="Seu radar está pronto"
+                />
+              )}
             </Link>
           )}
           {showIntake && (
@@ -236,6 +248,13 @@ export default function Appbar({
                 onClick={() => setDrawerOpen(false)}
               >
                 <span className="n">02</span>Radar
+                {radarNudge && onboardComplete && (
+                  <span
+                    className="appbar-nudge-dot"
+                    aria-label="new"
+                    title="Seu radar está pronto"
+                  />
+                )}
               </Link>
             )}
             <Link
