@@ -199,17 +199,15 @@ export default function IntakeForm({
         return;
       }
 
-      const data: unknown = await res.json().catch(() => null);
-      const runId =
-        isRecord(data) && typeof data.run_id === "string" ? data.run_id : null;
+      // The intake/submit response includes the anamnesis run_id but the
+      // chained-flow waiting screen (/generating?step=both) polls the
+      // aggregated /api/onboarding/status endpoint, which finds the latest
+      // run by user_id. So we do not need run_id in the URL.
+      await res.json().catch(() => null);
       // Reset submitting before navigation so the button is not stuck if the
       // user soft-navigates back (Next router keeps the form mounted).
       setSubmitting(false);
-      router.push(
-        runId
-          ? `/generating?step=anamnesis&run_id=${encodeURIComponent(runId)}`
-          : "/generating?step=anamnesis",
-      );
+      router.push("/generating?step=both");
     } catch {
       setSubmitting(false);
       setSubmitErr("Erro de rede. Tente novamente.");

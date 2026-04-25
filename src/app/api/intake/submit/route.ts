@@ -14,7 +14,7 @@ import { NextResponse, after, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runAnamnesis } from "@/lib/agents/anamnesis/run";
-import { sendAnamnesisDone, sendRunError } from "@/lib/email/notify";
+import { sendRunError } from "@/lib/email/notify";
 import type { AnamnesisInput } from "@/lib/agents/anamnesis/types";
 import type { Profile, OnboardState, ProfileUpdate } from "@/lib/supabase/types";
 
@@ -61,6 +61,185 @@ function parseBody(raw: unknown): IntakeSubmitBody {
  */
 function toJsonb<T>(v: T): Record<string, unknown> {
   return v as unknown as Record<string, unknown>;
+}
+
+/**
+ * Internal helper: dispatch Strategist via fetch to /api/strategist/run.
+ *
+ * Why fetch instead of an inline call: combined Anamnesis + Strategist
+ * runtime exceeds Vercel maxDuration (300s) on Hobby/Pro. Posting to the
+ * route opens a fresh function invocation with its own 300s budget.
+ *
+ * Why headers instead of session: this runs from inside after(), where the
+ * user cookie is no longer accessible. The shared secret + caller-provided
+ * user_id replace cookie auth; the route validates both.
+ *
+ * Safety net: if the fetch errors or returns non-2xx, we INSERT a
+ * strategist_runs error row directly so routing detects "strategist
+ * failed" instead of looping on "strategist null". This is the bridge
+ * that keeps /generating?step=both from getting stuck.
+ */
+async function dispatchStrategistChained(args: {
+  userId: string;
+  toEmail: string | null;
+  toName: string | null;
+  admin: ReturnType<typeof createAdminClient>;
+}): Promise<void> {
+  const { userId, toEmail, toName, admin } = args;
+
+  // In production, refuse to fall through to localhost: that would post from
+  // a Vercel function back to its own dev port and time out, then trigger
+  // the safety-net error path despite Anamnesis being healthy. Fail loud.
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  if (!baseUrl) {
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[api/intake/submit] NEXT_PUBLIC_SITE_URL missing in production; chained dispatch impossible",
+      );
+      await insertStrategistFailureRowSafe({
+        admin,
+        userId,
+        code: "site_url_missing",
+        message: "NEXT_PUBLIC_SITE_URL env var is not set on the server.",
+      });
+      if (toEmail) await sendRunError({ toEmail, toName, step: "strategist" });
+      return;
+    }
+  }
+  const url = `${baseUrl ?? "http://localhost:3001"}/api/strategist/run`;
+
+  const secret = process.env.INTERNAL_DISPATCH_SECRET;
+  if (!secret) {
+    console.error(
+      "[api/intake/submit] INTERNAL_DISPATCH_SECRET missing; cannot chain Strategist",
+    );
+    await insertStrategistFailureRowSafe({
+      admin,
+      userId,
+      code: "internal_dispatch_secret_missing",
+      message: "INTERNAL_DISPATCH_SECRET env var is not set on the server.",
+    });
+    if (toEmail) await sendRunError({ toEmail, toName, step: "strategist" });
+    return;
+  }
+
+  try {
+    // Reasonable upper bound: dispatch is fast (route inserts row + returns
+    // 202). 30s is generous; the actual round-trip is ~hundreds of ms.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-dispatch": secret,
+          "x-internal-user-id": userId,
+        },
+        body: JSON.stringify({}),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error("[api/intake/submit] strategist dispatch non-2xx", {
+        user_id: userId,
+        status: res.status,
+        body: body.slice(0, 500),
+      });
+      await insertStrategistFailureRowSafe({
+        admin,
+        userId,
+        code: "dispatch_http_error",
+        message: `Strategist dispatch returned ${res.status}.`,
+      });
+      if (toEmail) await sendRunError({ toEmail, toName, step: "strategist" });
+      return;
+    }
+
+    console.log("[api/intake/submit] strategist dispatched", {
+      user_id: userId,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[api/intake/submit] strategist dispatch threw", {
+      user_id: userId,
+      message,
+    });
+    await insertStrategistFailureRowSafe({
+      admin,
+      userId,
+      code: "dispatch_fetch_failed",
+      message,
+    });
+    if (toEmail) await sendRunError({ toEmail, toName, step: "strategist" });
+  }
+}
+
+/**
+ * Insert a strategist_runs row with status="error" only if there is no
+ * other strategist row for this user from the last 60 seconds.
+ *
+ * The dedupe window covers the race where the dispatch fetch was actually
+ * picked up (the strategist route inserted its running row and started its
+ * after()) but our caller observed a timeout/abort/network error first.
+ * Without this guard we would insert a stale error row that sorts above
+ * the real run by created_at desc, fooling routing into thinking the
+ * pipeline failed while the real Strategist quietly completes.
+ */
+async function insertStrategistFailureRowSafe(args: {
+  admin: ReturnType<typeof createAdminClient>;
+  userId: string;
+  code: string;
+  message: string;
+}): Promise<void> {
+  const { admin, userId, code, message } = args;
+
+  const sixtySecondsAgo = new Date(Date.now() - 60_000).toISOString();
+  const recent = await admin
+    .from("strategist_runs")
+    .select("id, status")
+    .eq("user_id", userId)
+    .gt("created_at", sixtySecondsAgo)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (recent.data) {
+    console.warn(
+      "[api/intake/submit] skipping failure row insert; recent strategist run exists",
+      {
+        user_id: userId,
+        existing_id: recent.data.id,
+        existing_status: recent.data.status,
+        intended_code: code,
+      },
+    );
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const insert = await admin.from("strategist_runs").insert({
+    user_id: userId,
+    status: "error",
+    started_at: nowIso,
+    finished_at: nowIso,
+    cycle_label: "intake_dispatch_failed",
+    profile_snapshot: null,
+    opportunity_ids: null,
+    output: { _meta: { error: { code, message } } },
+    agent_session_id: null,
+  });
+  if (insert.error) {
+    console.error(
+      "[api/intake/submit] failed to insert strategist failure row",
+      insert.error,
+    );
+  }
 }
 
 /** Narrow an unknown error to a safe redacted shape for DB storage. */
@@ -246,14 +425,28 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const toEmail = profile.email;
   const toName = profile.display_name ?? null;
 
-  // 9. Dispatch agent drain in background via after().
+  // 9. Dispatch the chained agent flow in background via after().
+  //
+  // Sequence inside the callback:
+  //   1. runAnamnesis -> stamp anamnesis_runs done + profile.structured_profile
+  //   2. SUPPRESS the per-agent Anamnesis email (single combined email is sent
+  //      by /api/strategist/run when the second agent finishes).
+  //   3. fetch /api/strategist/run with internal-dispatch headers to start
+  //      the Strategist on a FRESH 300s function budget (we cannot run both
+  //      agents inline; combined runtime exceeds Vercel maxDuration).
+  //   4. Safety net: if the fetch fails (network/5xx/secret missing), INSERT
+  //      a strategist_runs error row directly so routing detects "strategist
+  //      done failing" instead of looping on "strategist null". Send the
+  //      Strategist error email so the user knows.
   after(async () => {
     try {
       const output = await runAnamnesis(anamnesisInput);
 
-      // UPDATE row to done. notified_at is set in a SEPARATE update after the
-      // email send actually succeeds, so the column reflects what really
-      // happened (not what we hoped would happen).
+      // UPDATE row to done. notified_at is intentionally NOT set on this
+      // path: in the chained intake flow, no Anamnesis email is sent (the
+      // single combined email is sent by /api/strategist/run when the
+      // chain completes). notified_at on this row stays null forever for
+      // intake-flow runs; that is the correct signal.
       await admin
         .from("anamnesis_runs")
         .update({
@@ -263,7 +456,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         })
         .eq("id", runId);
 
-      // UPDATE profiles.structured_profile + anamnesis_run_id.
+      // UPDATE profiles.structured_profile + anamnesis_run_id BEFORE
+      // dispatching Strategist, so Strategist reads the rich profile.
       if (output.profile) {
         await admin
           .from("profiles")
@@ -274,7 +468,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           .eq("user_id", userId);
       }
 
-      console.log("[api/intake/submit] done", {
+      console.log("[api/intake/submit] anamnesis done", {
         user_id: userId,
         run_id: runId,
         input_tokens: output._meta.usage.input_tokens,
@@ -283,20 +477,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         tool_calls: output._meta.tool_calls,
       });
 
-      // Send completion email (fire-and-forget; failures are logged, not thrown).
-      // Stamp notified_at AFTER send so the column reflects reality.
-      if (toEmail) {
-        await sendAnamnesisDone({ toEmail, toName });
-        await admin
-          .from("anamnesis_runs")
-          .update({ notified_at: new Date().toISOString() })
-          .eq("id", runId);
-      } else {
-        console.warn("[api/intake/submit] no email on profile, skipping notification", { user_id: userId });
-      }
+      // 10. Chain Strategist via internal HTTP dispatch (fresh function = fresh
+      //     300s budget). The internal headers replace cookie auth.
+      await dispatchStrategistChained({
+        userId,
+        toEmail,
+        toName,
+        admin,
+      });
     } catch (err: unknown) {
       const errorBody = redactError(err, runId);
-      console.error("[api/intake/submit] agent failed", errorBody);
+      console.error("[api/intake/submit] anamnesis failed", errorBody);
 
       await admin
         .from("anamnesis_runs")
@@ -307,6 +498,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         })
         .eq("id", runId);
 
+      // Anamnesis errored: send the per-agent Anamnesis error email (the
+      // chained Strategist never ran).
       if (toEmail) {
         await sendRunError({ toEmail, toName, step: "anamnesis" });
         await admin

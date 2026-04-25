@@ -7,9 +7,15 @@ import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import RunPoller from "@/components/RunPoller";
 import StrategistDispatcher from "@/components/StrategistDispatcher";
+import BothPoller from "@/components/BothPoller";
 import type { RunStatus } from "@/lib/supabase/types";
 
-type Step = "anamnesis" | "strategist";
+// Two distinct flows render here:
+//   - "both" (default): the chained intake flow. Polled via /api/onboarding/status.
+//     Legacy step=anamnesis URLs are folded into this so old bookmarks do not break.
+//   - "strategist": admin or returning-user re-run of just the Strategist,
+//     dispatched from /radar. Polls /api/strategist/status.
+type Step = "both" | "strategist";
 
 interface PageProps {
   searchParams: Promise<{ step?: string; run_id?: string }>;
@@ -21,24 +27,53 @@ export default async function GeneratingPage({ searchParams }: PageProps) {
 
   const params = await searchParams;
   const stepParam = params.step;
-  const step: Step = stepParam === "strategist" ? "strategist" : "anamnesis";
+  // step=anamnesis is folded into step=both for back-compat with any in-flight URL.
+  const step: Step = stepParam === "strategist" ? "strategist" : "both";
   const runIdParam = params.run_id;
 
   const { destination, profile } = await nextDestinationFor(user.id);
-  // The destination guard only applies to the anamnesis step. For
-  // step=strategist, the user arrives here from /radar's own redirect when
-  // the strategist run is fresh/stale/running. nextDestinationFor only
-  // tracks anamnesis state, so it would loop us back to /radar otherwise.
-  if (step === "anamnesis" && destination !== "/generating") {
+
+  // Destination guard:
+  //   step=both: this is the canonical onboarding wait. If routing wants the
+  //     user elsewhere (eg. both done -> /report), follow it.
+  //   step=strategist: explicit re-run from /radar admin button. Routing
+  //     normally sends to /radar, so we skip the guard to avoid a loop.
+  if (step === "both" && destination !== "/generating?step=both") {
     redirect(destination);
   }
 
-  // Fetch the run row using the admin client (bypasses RLS).
+  const isAdmin = isAdminProfile(profile);
+  const onboard = profile?.onboard_state;
+  const handle = profile?.github_handle ?? "";
+
+  const appbarProps = {
+    route: "generating" as const,
+    userInitials:
+      (profile?.display_name ?? handle ?? "").slice(0, 2).toUpperCase() || "PA",
+    userHandle: handle || "you",
+    userName: profile?.display_name ?? handle ?? "you",
+    userCity: "",
+    intakeSubmitted: onboard?.intake_done ?? false,
+    onboardComplete: onboard?.report_seen ?? false,
+  };
+
+  // step=both: aggregated waiting screen for the chained intake flow.
+  // BothPoller fetches /api/onboarding/status itself; no run_id needed.
+  if (step === "both") {
+    return (
+      <div className="wrap">
+        <Appbar {...appbarProps} />
+        <BothPoller isAdmin={isAdmin} />
+        <CornerMeta />
+      </div>
+    );
+  }
+
+  // step=strategist: re-run flow.
   const admin = createAdminClient();
-  const table = step === "strategist" ? "strategist_runs" : "anamnesis_runs";
 
   const query = admin
-    .from(table)
+    .from("strategist_runs")
     .select("id, status, started_at, finished_at")
     .eq("user_id", user.id);
 
@@ -46,54 +81,29 @@ export default async function GeneratingPage({ searchParams }: PageProps) {
     ? await query.eq("id", runIdParam).maybeSingle()
     : await query.order("started_at", { ascending: false }).limit(1).maybeSingle();
 
-  const isAdmin = isAdminProfile(profile);
-  const onboard = profile?.onboard_state;
-  const handle = profile?.github_handle ?? "";
-
-  // No run row found yet.
+  // No run row found yet: dispatch a new strategist run client-side.
+  // The dispatcher replaces the URL with run_id once the API responds,
+  // then RunPoller takes over.
   if (!row) {
-    if (step === "strategist") {
-      // Dispatch a new strategist run client-side; dispatcher replaces URL with run_id
-      // once the API responds, then RunPoller takes over. No redirect-to-/radar because
-      // /radar now sends fresh/stale users here — looping back would be infinite.
-      return (
-        <div className="wrap">
-          <Appbar
-            route="generating"
-            userInitials={(profile?.display_name ?? handle ?? "").slice(0, 2).toUpperCase() || "PA"}
-            userHandle={handle || "you"}
-            userName={profile?.display_name ?? handle ?? "you"}
-            userCity=""
-            intakeSubmitted={onboard?.intake_done ?? false}
-            onboardComplete={onboard?.report_seen ?? false}
-          />
-          <StrategistDispatcher />
-          <CornerMeta />
-        </div>
-      );
-    }
-    // Anamnesis: user shouldn't land on /generating without submitting intake first.
-    redirect("/intake");
+    return (
+      <div className="wrap">
+        <Appbar {...appbarProps} />
+        <StrategistDispatcher />
+        <CornerMeta />
+      </div>
+    );
   }
 
   // Server-side redirect when the run is already done (no flash of loading screen).
   if (row.status === "done") {
-    redirect(step === "anamnesis" ? "/report" : "/radar");
+    redirect("/radar");
   }
 
   return (
     <div className="wrap">
-      <Appbar
-        route="generating"
-        userInitials={(profile?.display_name ?? handle ?? "").slice(0, 2).toUpperCase() || "PA"}
-        userHandle={handle || "you"}
-        userName={profile?.display_name ?? handle ?? "you"}
-        userCity=""
-        intakeSubmitted={onboard?.intake_done ?? false}
-        onboardComplete={onboard?.report_seen ?? false}
-      />
+      <Appbar {...appbarProps} />
       <RunPoller
-        step={step}
+        step="strategist"
         runId={row.id}
         startedAt={row.started_at}
         initialStatus={row.status as RunStatus}

@@ -22,8 +22,11 @@ export async function sendStrategistDone(args: {
   toEmail: string;
   toName: string | null;
 }): Promise<void> {
-  const radarUrl = `${SITE_URL}/radar`;
-  const { subject, html, text } = renderStrategistDone({ ...args, radarUrl });
+  // Land on /report so the user sees the editorial Anamnesis report first.
+  // /report's destination guard then routes returning users (report_seen=true)
+  // straight to /radar.
+  const landingUrl = `${SITE_URL}/report`;
+  const { subject, html, text } = renderStrategistDone({ ...args, landingUrl });
   await sendEmail({ to: args.toEmail, subject, html, text });
 }
 

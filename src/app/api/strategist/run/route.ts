@@ -28,6 +28,8 @@
 //  13.   On success: UPDATE row to done
 //  14.   On error: UPDATE row to error (redacted)
 
+import { Buffer } from "node:buffer";
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse, after, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -95,15 +97,56 @@ function redactStrategistError(
   };
 }
 
+// UUID validator for internal-dispatch user-id header.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  // 1. Auth guard.
-  const supabase = await createClient();
-  const auth = await supabase.auth.getUser();
-  if (auth.error || !auth.data.user) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // 1. Auth guard. Two paths:
+  //    (a) cookie-based user session (manual user re-runs from the UI)
+  //    (b) internal HTTP dispatch from /api/intake/submit's after() callback.
+  //        That request has no user cookie, so we accept a shared-secret
+  //        header + caller-provided user_id (UUID validated). The secret
+  //        is required (constant-time compare) and must come from the env.
+  let userId: string;
+
+  const internalSecret = process.env.INTERNAL_DISPATCH_SECRET;
+  const headerSecret = request.headers.get("x-internal-dispatch");
+  const headerUserId = request.headers.get("x-internal-user-id");
+
+  if (internalSecret && headerSecret && headerUserId) {
+    // Constant-time compare to avoid timing-side-channel leaks of the secret.
+    // timingSafeEqual throws on length mismatch; the try/catch normalises both
+    // length and value mismatches to a single 401.
+    const a = Buffer.from(headerSecret);
+    const b = Buffer.from(internalSecret);
+    let match = false;
+    try {
+      match = a.length === b.length && timingSafeEqual(a, b);
+    } catch {
+      match = false;
+    }
+    if (!match) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (!UUID_RE.test(headerUserId)) {
+      return NextResponse.json(
+        { error: "invalid_internal_user_id" },
+        { status: 400 },
+      );
+    }
+    userId = headerUserId;
+    console.log("[api/strategist/run] internal dispatch", { user_id: userId });
+  } else {
+    // Standard cookie auth path.
+    const supabase = await createClient();
+    const auth = await supabase.auth.getUser();
+    if (auth.error || !auth.data.user) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    // user_id is ALWAYS from the auth session, never from the request body.
+    userId = auth.data.user.id;
   }
-  // user_id is ALWAYS from the auth session, never from the request body.
-  const userId = auth.data.user.id;
 
   // 2. Parse body.
   let raw: unknown = null;

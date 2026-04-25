@@ -48,7 +48,7 @@ radar.pabloaa.com
 export interface StrategistDoneEmail {
   toEmail: string;
   toName: string | null;
-  radarUrl: string;
+  landingUrl: string;
 }
 
 export function renderStrategistDone(data: StrategistDoneEmail): {
@@ -58,19 +58,19 @@ export function renderStrategistDone(data: StrategistDoneEmail): {
 } {
   const greetingText = data.toName ? `Oi, ${data.toName}` : "Oi";
   const greetingHtml = data.toName ? `Oi, ${escapeHtml(data.toName)}` : "Oi";
-  const subject = "Seu radar está pronto";
+  const subject = "Tudo pronto. Seu report e seu radar te esperam.";
   const text = `${greetingText}.
 
-O Strategist ranqueou as oportunidades da semana e escreveu seu plano de 90 dias.
+Seu report editorial e seu radar de oportunidades estão prontos.
 
-Acesse seu radar: ${data.radarUrl}
+Acesse: ${data.landingUrl}
 
 Radar
 radar.pabloaa.com
 `;
   const html = `<p>${greetingHtml}.</p>
-<p>O Strategist ranqueou as oportunidades da semana e escreveu seu plano de 90 dias.</p>
-<p><a href="${data.radarUrl}">Acesse seu radar</a></p>
+<p>Seu report editorial e seu radar de oportunidades estão prontos.</p>
+<p><a href="${data.landingUrl}">Acesse agora</a></p>
 <p style="color:#888;font-size:12px;margin-top:32px">Radar - radar.pabloaa.com</p>`;
   return { subject, html, text };
 }
