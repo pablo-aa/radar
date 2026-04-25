@@ -4,13 +4,17 @@ import CornerMeta from "@/components/CornerMeta";
 import IntakeForm from "@/components/IntakeForm";
 import OnboardProgress from "@/components/OnboardProgress";
 import { fetchGitHubProfile } from "@/lib/github";
-import { getProfile, getServerUser } from "@/lib/onboarding";
+import { getServerUser } from "@/lib/onboarding";
 import { DEFAULT_ONBOARD_STATE } from "@/lib/supabase/types";
+import { nextDestinationFor } from "@/lib/routing";
 
 export default async function IntakePage() {
   const { user } = await getServerUser();
   if (!user) redirect("/login");
-  const profile = await getProfile(user.id);
+
+  const { destination, profile } = await nextDestinationFor(user.id);
+  if (destination !== "/intake") redirect(destination);
+
   const onboard = profile?.onboard_state ?? DEFAULT_ONBOARD_STATE;
   const firstRun = !onboard.report_seen;
   const handle = profile?.github_handle ?? "";

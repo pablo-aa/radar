@@ -2,14 +2,16 @@
 // Route path: /radar (the unauthed root `/` is the landing page).
 // Server component. Reads opportunities, latest scout_run, latest strategist_run.
 
+import { redirect } from "next/navigation";
 import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import OppCardLink from "@/components/cards/OppCardLink";
 import StrategistAutoRunner from "@/components/StrategistAutoRunner";
 import AdminRerunButton from "@/components/AdminRerunButton";
-import { getProfile, getServerUser } from "@/lib/onboarding";
+import { getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { isAdminProfile } from "@/lib/admin";
+import { nextDestinationFor } from "@/lib/routing";
 import {
   buildPicksMap,
   computeStrategistState,
@@ -110,7 +112,11 @@ function minutesAgo(iso: string): string {
 
 export default async function DashboardPage() {
   const { user } = await getServerUser();
-  const profile = user ? await getProfile(user.id) : null;
+  if (!user) redirect("/login");
+
+  const { destination, profile } = await nextDestinationFor(user.id);
+  if (destination !== "/radar") redirect(destination);
+
   const supabase = await createClient();
 
   const [oppsRes, scoutRes, stratRes] = await Promise.all([

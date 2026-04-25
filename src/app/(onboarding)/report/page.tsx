@@ -16,10 +16,11 @@ import AnamnesisRisks from "@/components/report/AnamnesisRisks";
 import AnamnesisYearShape from "@/components/report/AnamnesisYearShape";
 import AnamnesisReadings from "@/components/report/AnamnesisReadings";
 import AnamnesisColophon from "@/components/report/AnamnesisColophon";
-import { getProfile, getServerUser } from "@/lib/onboarding";
+import { getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 import type { AnamnesisReport } from "@/lib/sample-data/anamnesis-report";
 import { DEFAULT_ONBOARD_STATE } from "@/lib/supabase/types";
+import { nextDestinationFor } from "@/lib/routing";
 
 async function fetchReport(userId: string): Promise<AnamnesisReport | null> {
   try {
@@ -69,7 +70,10 @@ async function fetchReport(userId: string): Promise<AnamnesisReport | null> {
 export default async function ReportPage() {
   const { user } = await getServerUser();
   if (!user) redirect("/login");
-  const profile = await getProfile(user.id);
+
+  const { destination, profile } = await nextDestinationFor(user.id);
+  if (destination !== "/report") redirect(destination);
+
   const onboard = profile?.onboard_state ?? DEFAULT_ONBOARD_STATE;
   const firstView = !onboard.report_seen;
   const handle = profile?.github_handle ?? "";
