@@ -96,6 +96,10 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string>("");
   const [regenerating, setRegenerating] = useState(false);
+  // Preview overlay between "Continuar" and the actual dispatch. Mirrors
+  // Claude Design's clarify -> plan -> build pattern so the user can
+  // verify what the agent will see before paying for the run.
+  const [previewing, setPreviewing] = useState(false);
 
   const loadQuestions = async (regenerate: boolean, signal?: AbortSignal) => {
     if (regenerate) setRegenerating(true);
@@ -315,27 +319,47 @@ export default function ClarifyForm({ firstName }: { firstName: string }) {
 
   const { questions, aiError } = state;
   return (
-    <ClarifyBody
-      firstName={firstName}
-      questions={questions}
-      aiError={aiError}
-      answers={answers}
-      submitting={submitting}
-      regenerating={regenerating}
-      submitErr={submitErr}
-      onAnswerText={(qid, text) => setAnswer(qid, { otherText: text })}
-      onAnswerShortText={(qid, text) =>
-        setAnswer(qid, {
-          otherText: text,
-          otherEnabled: true,
-          values: [],
-        })
-      }
-      onToggleSingle={toggleSingleValue}
-      onToggleMulti={toggleMultiValue}
-      onSubmit={submit}
-      onRegenerate={() => loadQuestions(true)}
-    />
+    <>
+      <ClarifyBody
+        firstName={firstName}
+        questions={questions}
+        aiError={aiError}
+        answers={answers}
+        submitting={submitting}
+        regenerating={regenerating}
+        submitErr={submitErr}
+        onAnswerText={(qid, text) => setAnswer(qid, { otherText: text })}
+        onAnswerShortText={(qid, text) =>
+          setAnswer(qid, {
+            otherText: text,
+            otherEnabled: true,
+            values: [],
+          })
+        }
+        onToggleSingle={toggleSingleValue}
+        onToggleMulti={toggleMultiValue}
+        onContinue={() => setPreviewing(true)}
+        onSkip={() => submit(true)}
+        onRegenerate={() => loadQuestions(true)}
+      />
+      {previewing && (
+        <PreviewModal
+          firstName={firstName}
+          questions={questions}
+          answers={answers}
+          submitting={submitting}
+          onCancel={() => setPreviewing(false)}
+          onConfirm={() => {
+            // Keep the modal mounted during the request so the user sees
+            // the disabled "Confirmar" button rather than being dumped back
+            // on the form with no spinner. The success path navigates away
+            // (route change unmounts everything); the error path resets
+            // submitting and keeps the modal open so the user can retry.
+            void submit(false);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -351,7 +375,8 @@ type BodyProps = {
   onAnswerShortText: (qid: string, text: string) => void;
   onToggleSingle: (q: Question, value: string) => void;
   onToggleMulti: (q: Question, value: string) => void;
-  onSubmit: (skipped: boolean) => void;
+  onContinue: () => void;
+  onSkip: () => void;
   onRegenerate: () => void;
 };
 
@@ -367,7 +392,8 @@ function ClarifyBody({
   onAnswerShortText,
   onToggleSingle,
   onToggleMulti,
-  onSubmit,
+  onContinue,
+  onSkip,
   onRegenerate,
 }: BodyProps) {
   const eliminatory = useMemo(
@@ -467,7 +493,7 @@ function ClarifyBody({
             opacity: submitting ? 0.4 : 1,
           }}
           disabled={submitting}
-          onClick={() => onSubmit(false)}
+          onClick={onContinue}
         >
           <span className="hi">C</span>ontinuar para o relatorio
           <span className="cur"></span>
@@ -477,7 +503,7 @@ function ClarifyBody({
           className="btn ghost"
           style={{ cursor: submitting ? "not-allowed" : "pointer" }}
           disabled={submitting}
-          onClick={() => onSubmit(true)}
+          onClick={onSkip}
         >
           Pular e gerar mesmo assim
         </button>
@@ -689,5 +715,179 @@ function ChipGroup({
         </p>
       ) : null}
     </>
+  );
+}
+
+// ── preview modal ─────────────────────────────────────────────────────
+
+type PreviewModalProps = {
+  firstName: string;
+  questions: Question[];
+  answers: Record<string, AnswerState>;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
+
+function summarizeAnswer(q: Question, a: AnswerState | undefined): string {
+  if (!a) return "(sem resposta)";
+  const optByValue = new Map((q.options ?? []).map((o) => [o.value, o.label]));
+  const labels = a.values
+    .map((v) => optByValue.get(v))
+    .filter((l): l is string => typeof l === "string");
+  const otherText = a.otherEnabled ? a.otherText.trim() : "";
+  const parts: string[] = [];
+  if (labels.length > 0) parts.push(labels.join(", "));
+  if (otherText) parts.push(`outro: ${otherText}`);
+  if (q.kind === "short_text" && otherText) return otherText;
+  if (parts.length === 0) return "(sem resposta)";
+  return parts.join(" · ");
+}
+
+function PreviewModal({
+  firstName,
+  questions,
+  answers,
+  submitting,
+  onCancel,
+  onConfirm,
+}: PreviewModalProps) {
+  // Esc to close (only when not submitting). Tied to mount so it cleans up
+  // on unmount.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !submitting) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [submitting, onCancel]);
+
+  // Block scrim click while a submit is in flight, so a stray miss does
+  // not orphan the user on the form with no spinner while the request
+  // continues in the background.
+  const onScrim = () => {
+    if (!submitting) onCancel();
+  };
+
+  const answered = questions.filter((q) => {
+    const a = answers[q.id];
+    if (!a) return false;
+    return (
+      a.values.length > 0 || (a.otherEnabled && a.otherText.trim().length > 0)
+    );
+  });
+  const unanswered = questions.length - answered.length;
+
+  return (
+    <div className="ana-modal-scrim" onClick={onScrim}>
+      <div
+        className="ana-modal"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxHeight: "84vh", overflow: "auto" }}
+      >
+        <div className="ana-modal-kicker">
+          § preview · o que a Anamnesis e o Strategist vao considerar
+        </div>
+        <h3 className="ana-modal-h">
+          Tudo certo, {firstName}?
+        </h3>
+        <p className="ana-modal-body">
+          Confirme as respostas abaixo. Anamnesis vai usar isso como
+          autoridade sobre seu CV e GitHub. O Strategist vai filtrar
+          oportunidades incompativeis antes de rankear. Voltar pra editar
+          custa zero.
+        </p>
+        <ul className="ana-modal-list" style={{ paddingLeft: 0, listStyle: "none" }}>
+          {questions.map((q) => {
+            const a = answers[q.id];
+            const has =
+              a &&
+              (a.values.length > 0 ||
+                (a.otherEnabled && a.otherText.trim().length > 0));
+            return (
+              <li
+                key={q.id}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                  marginBottom: 10,
+                  paddingBottom: 10,
+                  borderBottom: ".5px solid var(--ink-5, rgba(0,0,0,0.05))",
+                }}
+              >
+                <span
+                  className={"ana-modal-dot " + (has ? "" : "off")}
+                  style={{ marginTop: 6 }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      color: "var(--ink-3)",
+                      letterSpacing: ".04em",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {q.source === "eliminatory" ? "constraint" : "personalizada"}
+                    {" · "}
+                    {q.category.replace(/_/g, " ")}
+                  </div>
+                  <div style={{ marginTop: 2, fontSize: 13 }}>{q.question}</div>
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 13,
+                      color: has ? undefined : "var(--ink-4)",
+                      fontStyle: has ? "normal" : "italic",
+                    }}
+                  >
+                    {summarizeAnswer(q, a)}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        {unanswered > 0 && (
+          <div
+            style={{
+              marginTop: 4,
+              marginBottom: 14,
+              fontFamily: "var(--mono)",
+              fontSize: 11,
+              color: "var(--ink-3)",
+              letterSpacing: ".04em",
+              textTransform: "uppercase",
+            }}
+          >
+            {unanswered} {unanswered === 1 ? "pergunta" : "perguntas"} sem
+            resposta. Tudo bem seguir, mas a Anamnesis tera menos contexto.
+          </div>
+        )}
+        <div className="ana-modal-actions">
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            Editar respostas
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={onConfirm}
+            disabled={submitting}
+          >
+            Confirmar e gerar
+            <span className="cur"></span>
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
