@@ -88,6 +88,10 @@ function validateQuestion(v: unknown): ClarifyQuestion | null {
     typeof o.placeholder === "string" && o.placeholder.length > 0
       ? o.placeholder
       : undefined;
+  const grounding =
+    typeof o.grounding === "string" && o.grounding.trim().length > 0
+      ? o.grounding.trim().slice(0, 60)
+      : undefined;
 
   // Default max_select for multi_choice when the agent omits it. Without
   // this, ChipGroup would render an unbounded multi-select with no UI hint
@@ -106,6 +110,7 @@ function validateQuestion(v: unknown): ClarifyQuestion | null {
     category: category as ClarifyQuestionCategory,
     kind: kind as ClarifyQuestionKind,
     source: "ai_generated",
+    grounding,
     options,
     allow_other,
     max_select,

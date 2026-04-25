@@ -27,6 +27,7 @@ type Question = {
     | "language";
   kind: "single_choice" | "multi_choice" | "scale" | "short_text";
   source: "eliminatory" | "ai_generated";
+  grounding?: string;
   options?: Option[];
   allow_other?: boolean;
   max_select?: number;
@@ -58,6 +59,7 @@ function isQuestion(v: unknown): v is Question {
   if (typeof o.category !== "string") return false;
   if (o.options !== undefined && !Array.isArray(o.options)) return false;
   if (Array.isArray(o.options) && !o.options.every(isOption)) return false;
+  if (o.grounding !== undefined && typeof o.grounding !== "string") return false;
   return true;
 }
 
@@ -436,6 +438,9 @@ function ClarifyBody({
         </div>
       )}
 
+      <ProgressStrip answered={answered} total={total} />
+
+
       <SectionHeader
         n="A"
         title="Constraints e ambicao"
@@ -538,6 +543,67 @@ function ClarifyBody({
   );
 }
 
+function ProgressStrip({
+  answered,
+  total,
+}: {
+  answered: number;
+  total: number;
+}) {
+  const pct = total > 0 ? Math.round((answered / total) * 100) : 0;
+  return (
+    <div
+      style={{
+        marginTop: 18,
+        marginBottom: 4,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+      aria-label={`progress: ${answered} of ${total}`}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          fontFamily: "var(--mono)",
+          fontSize: 11,
+          color: "var(--ink-3)",
+          letterSpacing: ".04em",
+          textTransform: "uppercase",
+        }}
+      >
+        <span>progresso</span>
+        <span>
+          {String(answered).padStart(2, "0")} de {String(total).padStart(2, "0")}{" "}
+          respondidas
+        </span>
+      </div>
+      <div
+        style={{
+          height: 2,
+          background: "var(--ink-5, rgba(0,0,0,0.08))",
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: `${pct}%`,
+            background: "var(--accent)",
+            transition: "width 220ms ease-out",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function SectionHeader({
   n,
   title,
@@ -607,6 +673,26 @@ function QuestionRow({
           {q.source === "eliminatory" ? "constraint" : "personalizada"}
         </span>
       </div>
+      {q.grounding && (
+        <div
+          style={{
+            display: "inline-block",
+            maxWidth: "100%",
+            marginTop: 4,
+            padding: "2px 8px",
+            border: ".5px solid var(--accent)",
+            color: "var(--accent)",
+            fontFamily: "var(--mono)",
+            fontSize: 10,
+            letterSpacing: 0,
+            textTransform: "none",
+            whiteSpace: "normal",
+            wordBreak: "break-word",
+          }}
+        >
+          porque {q.grounding}
+        </div>
+      )}
       <p className="input-hint">{q.context}</p>
 
       {q.kind === "short_text" ? (

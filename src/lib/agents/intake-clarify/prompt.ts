@@ -31,7 +31,8 @@ Return ONLY this JSON, no preamble:
     {
       "id": "snake_case_slug",
       "question": "Direct PT question, max 180 chars.",
-      "context": "1 short PT sentence explaining why we ask. Reference the specific signal (repo name, bio phrase, declared interest, city).",
+      "grounding": "Short PT phrase naming the specific input signal that motivated this question. Max 60 chars. Examples: 'repo lambda-prim · 800 stars', 'bio: AI researcher', 'momento_text fala em pivotar', 'baseado em Brasilia'.",
+      "context": "1 short PT sentence expanding the question. Why we ask, in plain language. Different from grounding.",
       "category": "intensity" | "role_precision" | "disambiguation" | "status",
       "kind": "single_choice" | "multi_choice" | "scale" | "short_text",
       "options": [{"value":"snake_value","label":"PT label"}],
@@ -56,6 +57,17 @@ Return ONLY this JSON, no preamble:
 - Do NOT invent specific facts and ask the user to confirm hallucinations. If the signal is not in the input, do not write the question.
 - IDs must be unique snake_case slugs derived from the subject (e.g., "tempo_no_lambda_prim", "role_no_meti", "status_atual"). Stable, lowercase, no accents.
 - Portuguese only. No em-dashes (the character typed as -- or unicode 0x2014). Use commas, periods, colons.
+
+# Adapting to thin signals
+
+When the inputs are thin, do not force grounded follow-ups that you cannot actually ground. "Thin" means any of: GitHub public_repos < 5, GitHub bio empty, no moment_text, no cv_attached. In that case:
+
+- Reduce to 3 questions (do not stretch to 4).
+- Lean toward category "status" (current employment / study situation) and category "disambiguation" of any single repo or bio phrase that does exist.
+- AVOID "intensity" or "role_precision" questions that require a public org or repo signal that does not exist; the user has nothing to anchor them to.
+- The "grounding" field can be the absence itself, e.g. "bio vazio, conta nova": that IS a real signal. Frame the question around what we do NOT know.
+
+When inputs are rich (10+ repos, populated bio, moment_text present), use the full 4 questions and prefer "intensity" + "disambiguation" of the most prominent repos / orgs. The bigger the signal, the worse the cost of guessing wrong.
 
 # Question quality checklist (mental)
 

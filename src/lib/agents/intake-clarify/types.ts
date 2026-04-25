@@ -35,6 +35,11 @@ export type ClarifyQuestion = {
   category: ClarifyQuestionCategory;
   kind: ClarifyQuestionKind;
   source: ClarifyQuestionSource;
+  // Optional short phrase that names the SPECIFIC input signal that
+  // motivated this question (e.g. "repo lambda-prim", "bio diz 'co-founder'").
+  // Rendered as a badge above the question to show the user where the
+  // question came from. Only set on ai_generated questions.
+  grounding?: string;
   // Required for every kind except short_text. Order matters for "scale".
   options?: ClarifyQuestionOption[];
   // Only meaningful for choice kinds. When true, the form shows an "outro"
