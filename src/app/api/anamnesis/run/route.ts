@@ -1,8 +1,14 @@
 // POST /api/anamnesis/run
 //
-// Runs the Anamnesis agent (raw messages.create loop) for the authenticated user.
-// Inserts an anamnesis_runs row with status="running", calls runAnamnesis(),
-// then updates the row to "done" or "error".
+// Fire-and-forget design (as of UX Overhaul Etapa 1):
+//   All upfront validation (auth, parse, profile, guards, INSERT running row)
+//   runs synchronously and returns 202 { run_id, status: "running" } immediately.
+//   The actual agent drain is dispatched via `after()` from next/server, which
+//   keeps the Node.js function alive after the HTTP response is sent (Vercel:
+//   the function stays warm until after() callbacks complete or maxDuration is
+//   hit, whichever comes first). If the drain exceeds maxDuration (300 s), the
+//   platform kills the function and the row stays "running" indefinitely — a
+//   future cleanup job or admin force-run can recover it.
 //
 // Idempotency order (per-request, top-to-bottom):
 //   1. Auth guard
@@ -12,12 +18,12 @@
 //   5. Done guard (skip if force && isAdmin): if latest row is done, return cached
 //   6. Running guard (skip if force && isAdmin): 5-min window -> 409
 //   7. INSERT running row
-//   8. Call runAnamnesis()
-//   9. On success: UPDATE row to done, UPDATE profiles.structured_profile
-//  10. On error: UPDATE row to error (redacted)
-//  11. Return { run_id, cached?: true }
+//   8. after(): call runAnamnesis()
+//   9.   On success: UPDATE row to done, UPDATE profiles.structured_profile
+//  10.   On error: UPDATE row to error (redacted)
+//  11. Return 202 { run_id, status: "running" }
 
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse, after, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminProfile } from "@/lib/admin";
@@ -54,15 +60,18 @@ function toJsonb<T>(v: T): Record<string, unknown> {
 }
 
 /** Narrow an unknown error to a safe redacted shape for DB storage. */
-function redactError(err: unknown): { code: string; message: string } {
-  if (err instanceof Error) {
-    const e = err as Error & { error?: { type?: string } };
-    return {
-      code: e.error?.type ?? e.name ?? "unknown_error",
-      message: e.message,
-    };
-  }
-  return { code: "unknown_error", message: "An unexpected error occurred." };
+function redactAnamnesisError(
+  err: unknown,
+  runId: string,
+): { code: string; message: string; run_id: string } {
+  const base =
+    err instanceof Error
+      ? {
+          code: (err as Error & { error?: { type?: string } }).error?.type ?? err.name ?? "unknown_error",
+          message: err.message,
+        }
+      : { code: "unknown_error", message: "An unexpected error occurred." };
+  return { ...base, run_id: runId };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -125,7 +134,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .maybeSingle();
 
     if (latestRun) {
-      return NextResponse.json({ run_id: latestRun.id, cached: true });
+      return NextResponse.json({ run_id: latestRun.id, status: "done", cached: true });
     }
   }
 
@@ -220,63 +229,58 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       : null,
   };
 
-  // 8. Call runAnamnesis().
-  try {
-    const output = await runAnamnesis(anamnesisInput);
+  // 8. Dispatch drain asynchronously via after(). The HTTP response is sent
+  //    immediately with 202; after() keeps the function warm while the drain runs.
+  after(async () => {
+    try {
+      const output = await runAnamnesis(anamnesisInput);
 
-    // 9. UPDATE row to done.
-    await admin
-      .from("anamnesis_runs")
-      .update({
-        status: "done",
-        finished_at: new Date().toISOString(),
-        output: toJsonb(output),
-      })
-      .eq("id", runId);
+      // 9. UPDATE row to done.
+      await admin
+        .from("anamnesis_runs")
+        .update({
+          status: "done",
+          finished_at: new Date().toISOString(),
+          output: toJsonb(output),
+        })
+        .eq("id", runId);
 
-    // UPDATE profiles.structured_profile + anamnesis_run_id.
-    await admin
-      .from("profiles")
-      .update({
-        structured_profile: toJsonb(output.profile),
-        anamnesis_run_id: runId,
-      })
-      .eq("user_id", userId);
+      // UPDATE profiles.structured_profile + anamnesis_run_id.
+      if (output.profile) {
+        await admin
+          .from("profiles")
+          .update({
+            structured_profile: toJsonb(output.profile),
+            anamnesis_run_id: runId,
+          })
+          .eq("user_id", userId);
+      }
 
-    // 10. Log usage + cost.
-    console.log("[api/anamnesis/run]", {
-      user_id: userId,
-      run_id: runId,
-      input_tokens: output._meta.usage.input_tokens,
-      output_tokens: output._meta.usage.output_tokens,
-      cost_usd: output._meta.cost_usd,
-      tool_calls: output._meta.tool_calls,
-    });
+      // Log usage + cost.
+      console.log("[api/anamnesis/run] done", {
+        user_id: userId,
+        run_id: runId,
+        input_tokens: output._meta.usage.input_tokens,
+        output_tokens: output._meta.usage.output_tokens,
+        cost_usd: output._meta.cost_usd,
+        tool_calls: output._meta.tool_calls,
+      });
+    } catch (err: unknown) {
+      // 10. UPDATE row to error (redacted).
+      const errorBody = redactAnamnesisError(err, runId);
+      console.error("[api/anamnesis/run] agent failed", errorBody);
 
-    return NextResponse.json({ run_id: runId });
-  } catch (err: unknown) {
-    // 11. UPDATE row to error (redacted).
-    const redacted = redactError(err);
-    console.error("[api/anamnesis/run] agent failed", {
-      run_id: runId,
-      code: redacted.code,
-      message: redacted.message,
-    });
+      await admin
+        .from("anamnesis_runs")
+        .update({
+          status: "error",
+          finished_at: new Date().toISOString(),
+          output: toJsonb({ _meta: { error: errorBody } }),
+        })
+        .eq("id", runId);
+    }
+  });
 
-    await admin
-      .from("anamnesis_runs")
-      .update({
-        status: "error",
-        finished_at: new Date().toISOString(),
-        output: {
-          _meta: { error: redacted },
-        },
-      })
-      .eq("id", runId);
-
-    return NextResponse.json(
-      { error: "anamnesis_run_failed", run_id: runId },
-      { status: 500 },
-    );
-  }
+  // 11. Return 202 immediately — client polls /api/anamnesis/status for updates.
+  return NextResponse.json({ run_id: runId, status: "running" }, { status: 202 });
 }
