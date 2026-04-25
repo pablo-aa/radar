@@ -221,10 +221,13 @@ async function drainSession(
     });
 
     const stream = await client.beta.sessions.events.stream(sessionId);
+    // 280s leaves a 20s safety margin under Vercel maxDuration=300s.
+    // Earlier value (240s) was tripping mid-flight when the agent's first
+    // turn took longer than 4 minutes on the full 98-opp catalog.
     timeoutId = setTimeout(() => {
       timeoutFired = true;
       stream.controller.abort();
-    }, 240_000);
+    }, 280_000);
     options?.abortSignal?.addEventListener(
       "abort",
       () => {
@@ -315,6 +318,19 @@ async function drainSession(
     await client.beta.sessions.delete(sessionId).catch(() => {
       // best-effort teardown
     });
+  }
+
+  // Convert silent failure modes into thrown errors so the caller marks
+  // the row as "error" instead of "done" with empty output.
+  if (exitReason === "abort") {
+    throw new Error(
+      `Strategist stream aborted after timeout. session_id=${sessionId} input_tokens=${usage.input_tokens} output_tokens=${usage.output_tokens}. The agent likely did not finish its first turn within 280s on a 98-opp catalog.`,
+    );
+  }
+  if (usage.input_tokens === 0 && usage.output_tokens === 0) {
+    throw new Error(
+      `Strategist session produced zero tokens. session_id=${sessionId}. The agent never made a model call (no span.model_request_end events observed).`,
+    );
   }
 
   const finishedAt = new Date().toISOString();

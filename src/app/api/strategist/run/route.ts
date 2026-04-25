@@ -63,6 +63,42 @@ function toJsonb<T>(v: T): Record<string, unknown> {
   return v as unknown as Record<string, unknown>;
 }
 
+/**
+ * Trim an opportunity row to the fields the Strategist agent actually needs
+ * for scoring and producing rich cards. Drops bookkeeping columns and
+ * narrows deep_data to an allowlist so the input payload does not balloon
+ * past what the agent's first turn can process within our stream timeout.
+ *
+ * deep_data alone is ~60% of the catalog payload bytes; this allowlist keeps
+ * the signal-rich fields (partner_institutions, red_flags, etc) and drops
+ * verbose ones that only matter on the detail page.
+ */
+function trimOpportunityForAgent(o: Opportunity): Record<string, unknown> {
+  // We drop deep_data entirely (~60% of total payload bytes) and ship just
+  // the structural fields the agent needs for scoring + writing rich cards.
+  // Trade-off: picks lose access to partner_institutions / red_flags etc;
+  // we accept that to keep the first-turn input under ~10K tokens so the
+  // agent's first reply fits well under our 280s stream timeout.
+  // If picks quality regresses noticeably, narrow this back to allowlist
+  // a couple of high-signal subkeys (eg. red_flags, eligibility).
+  return {
+    id: o.id,
+    title: o.title,
+    org: o.org,
+    loc: o.loc,
+    category: o.category,
+    opportunity_type: o.opportunity_type,
+    deadline: o.deadline,
+    funding_brl: o.funding_brl,
+    commitment: o.commitment,
+    status: o.status,
+    source_url: o.source_url,
+    seniority: o.seniority,
+    audience: o.audience,
+    location_req: o.location_req,
+  };
+}
+
 function parseBody(raw: unknown): StrategistBody {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
@@ -313,9 +349,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const toName = profile.display_name ?? null;
 
   // Capture for the after() closure.
+  // Send a trimmed view of each opportunity to keep input tokens manageable.
+  // Full rows include deep_data + audit columns that bloat the prompt and
+  // push the agent's first turn past our stream timeout.
   const strategistInput = {
     profile: profileSnapshot,
-    opportunities: opportunities.map(toJsonb),
+    opportunities: opportunities.map(trimOpportunityForAgent),
   };
 
   // 10-14. Dispatch session create + drain asynchronously via after().
