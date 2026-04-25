@@ -34,6 +34,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { computeCycleLabel } from "@/lib/cycle";
 import { createStrategistSession } from "@/lib/agents/strategist/run-agent";
 import { isAdminProfile } from "@/lib/admin";
+import { sendStrategistDone, sendRunError } from "@/lib/email/notify";
 import type { Opportunity, Profile } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
@@ -263,6 +264,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const runId: string = runInsert.data.id;
 
+  // Capture email info for the after() closure before the response is sent.
+  const toEmail = profile.email;
+  const toName = profile.display_name ?? null;
+
   // Capture for the after() closure.
   const strategistInput = {
     profile: profileSnapshot,
@@ -286,7 +291,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // 12. Drain the MA event stream.
       const { output, meta } = await handle.drain();
 
-      // 13. UPDATE row to done.
+      // 13. UPDATE row to done. notified_at is stamped in a separate update
+      // after the email actually sends, so the column reflects reality.
       await admin
         .from("strategist_runs")
         .update({
@@ -304,6 +310,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         output_tokens: meta.usage.output_tokens,
         cost_usd: meta.cost_usd,
       });
+
+      // Send completion email (fire-and-forget; failures are logged, not thrown).
+      // Stamp notified_at AFTER send so the column reflects reality.
+      if (toEmail) {
+        await sendStrategistDone({ toEmail, toName });
+        await admin
+          .from("strategist_runs")
+          .update({ notified_at: new Date().toISOString() })
+          .eq("id", runId);
+      } else {
+        console.warn("[api/strategist/run] no email on profile, skipping notification", { user_id: userId });
+      }
     } catch (err: unknown) {
       // 14. UPDATE row to error (redacted).
       const errorBody = redactStrategistError(err, runId);
@@ -317,6 +335,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           output: toJsonb({ _meta: { error: errorBody } }),
         })
         .eq("id", runId);
+
+      if (toEmail) {
+        await sendRunError({ toEmail, toName, step: "strategist" });
+        await admin
+          .from("strategist_runs")
+          .update({ notified_at: new Date().toISOString() })
+          .eq("id", runId);
+      }
     }
   });
 

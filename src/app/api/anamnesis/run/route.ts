@@ -28,6 +28,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminProfile } from "@/lib/admin";
 import { runAnamnesis } from "@/lib/agents/anamnesis/run";
+import { sendAnamnesisDone, sendRunError } from "@/lib/email/notify";
 import type { AnamnesisInput } from "@/lib/agents/anamnesis/types";
 import type { Profile } from "@/lib/supabase/types";
 
@@ -229,13 +230,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       : null,
   };
 
+  // Capture email info for the after() closure before the response is sent.
+  const toEmail = profile.email;
+  const toName = profile.display_name ?? null;
+
   // 8. Dispatch drain asynchronously via after(). The HTTP response is sent
   //    immediately with 202; after() keeps the function warm while the drain runs.
   after(async () => {
     try {
       const output = await runAnamnesis(anamnesisInput);
 
-      // 9. UPDATE row to done.
+      // 9. UPDATE row to done. notified_at is stamped in a separate update
+      // after the email actually sends, so the column reflects reality.
       await admin
         .from("anamnesis_runs")
         .update({
@@ -265,6 +271,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         cost_usd: output._meta.cost_usd,
         tool_calls: output._meta.tool_calls,
       });
+
+      // Send completion email (fire-and-forget; failures are logged, not thrown).
+      // Stamp notified_at AFTER send so the column reflects reality.
+      if (toEmail) {
+        await sendAnamnesisDone({ toEmail, toName });
+        await admin
+          .from("anamnesis_runs")
+          .update({ notified_at: new Date().toISOString() })
+          .eq("id", runId);
+      } else {
+        console.warn("[api/anamnesis/run] no email on profile, skipping notification", { user_id: userId });
+      }
     } catch (err: unknown) {
       // 10. UPDATE row to error (redacted).
       const errorBody = redactAnamnesisError(err, runId);
@@ -278,6 +296,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           output: toJsonb({ _meta: { error: errorBody } }),
         })
         .eq("id", runId);
+
+      if (toEmail) {
+        await sendRunError({ toEmail, toName, step: "anamnesis" });
+        await admin
+          .from("anamnesis_runs")
+          .update({ notified_at: new Date().toISOString() })
+          .eq("id", runId);
+      }
     }
   });
 

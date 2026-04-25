@@ -14,6 +14,7 @@ import { NextResponse, after, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runAnamnesis } from "@/lib/agents/anamnesis/run";
+import { sendAnamnesisDone, sendRunError } from "@/lib/email/notify";
 import type { AnamnesisInput } from "@/lib/agents/anamnesis/types";
 import type { Profile, OnboardState, ProfileUpdate } from "@/lib/supabase/types";
 
@@ -241,12 +242,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         : null,
   };
 
+  // Capture email info for the after() closure before the response is sent.
+  const toEmail = profile.email;
+  const toName = profile.display_name ?? null;
+
   // 9. Dispatch agent drain in background via after().
   after(async () => {
     try {
       const output = await runAnamnesis(anamnesisInput);
 
-      // UPDATE row to done.
+      // UPDATE row to done. notified_at is set in a SEPARATE update after the
+      // email send actually succeeds, so the column reflects what really
+      // happened (not what we hoped would happen).
       await admin
         .from("anamnesis_runs")
         .update({
@@ -275,6 +282,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         cost_usd: output._meta.cost_usd,
         tool_calls: output._meta.tool_calls,
       });
+
+      // Send completion email (fire-and-forget; failures are logged, not thrown).
+      // Stamp notified_at AFTER send so the column reflects reality.
+      if (toEmail) {
+        await sendAnamnesisDone({ toEmail, toName });
+        await admin
+          .from("anamnesis_runs")
+          .update({ notified_at: new Date().toISOString() })
+          .eq("id", runId);
+      } else {
+        console.warn("[api/intake/submit] no email on profile, skipping notification", { user_id: userId });
+      }
     } catch (err: unknown) {
       const errorBody = redactError(err, runId);
       console.error("[api/intake/submit] agent failed", errorBody);
@@ -287,6 +306,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           output: toJsonb({ _meta: { error: errorBody } }),
         })
         .eq("id", runId);
+
+      if (toEmail) {
+        await sendRunError({ toEmail, toName, step: "anamnesis" });
+        await admin
+          .from("anamnesis_runs")
+          .update({ notified_at: new Date().toISOString() })
+          .eq("id", runId);
+      }
     }
   });
 

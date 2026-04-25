@@ -197,6 +197,7 @@ export type AnamnesisRun = {
   status: RunStatus;
   output: Record<string, unknown> | null;
   created_at: string;
+  notified_at: string | null;
 };
 
 export type AnamnesisRunInsert = {
@@ -208,6 +209,7 @@ export type AnamnesisRunInsert = {
   status?: RunStatus;
   output?: Record<string, unknown> | null;
   created_at?: string;
+  notified_at?: string | null;
 };
 
 export type AnamnesisRunUpdate = Partial<AnamnesisRunInsert>;
@@ -225,6 +227,7 @@ export type StrategistRun = {
   status: RunStatus;
   cycle_label: string | null;
   created_at: string;
+  notified_at: string | null;
 };
 
 export type StrategistRunInsert = {
@@ -239,6 +242,7 @@ export type StrategistRunInsert = {
   status?: RunStatus;
   cycle_label?: string | null;
   created_at?: string;
+  notified_at?: string | null;
 };
 
 export type StrategistRunUpdate = Partial<StrategistRunInsert>;
