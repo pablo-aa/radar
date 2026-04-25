@@ -79,6 +79,36 @@ function toJsonb<T>(v: T): Record<string, unknown> {
  * failed" instead of looping on "strategist null". This is the bridge
  * that keeps /generating?step=both from getting stuck.
  */
+/**
+ * Defense-in-depth: only allow the chained dispatch fetch to point at
+ * hosts we own. Without this, a misconfigured NEXT_PUBLIC_SITE_URL on
+ * Vercel (typo, paste error) would POST the INTERNAL_DISPATCH_SECRET
+ * and a user_id to whatever origin the env var names, leaking the
+ * secret to a third party.
+ *
+ * Allowed hosts (case-insensitive):
+ *   - radar.pabloaa.com               (production custom domain)
+ *   - *.vercel.app over HTTPS         (any Vercel preview/default URL)
+ *   - localhost / 127.0.0.1           (any port, dev only)
+ *
+ * Returns false on parse errors so a malformed URL also fails loud.
+ */
+function isAllowedDispatchHost(urlString: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    return false;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === "radar.pabloaa.com") return true;
+  if (parsed.protocol === "https:" && hostname.endsWith(".vercel.app")) {
+    return true;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1") return true;
+  return false;
+}
+
 async function dispatchStrategistChained(args: {
   userId: string;
   toEmail: string | null;
@@ -107,6 +137,25 @@ async function dispatchStrategistChained(args: {
     }
   }
   const url = `${baseUrl ?? "http://localhost:3001"}/api/strategist/run`;
+
+  // Belt-and-suspenders host allowlist. If NEXT_PUBLIC_SITE_URL is misset
+  // (typo, accidental paste of a different project URL, etc), we refuse
+  // to fetch rather than leak the dispatch secret to whatever origin the
+  // env var names.
+  if (!isAllowedDispatchHost(url)) {
+    console.error(
+      "[api/intake/submit] dispatch URL host not in allowlist; refusing fetch",
+      { url },
+    );
+    await insertStrategistFailureRowSafe({
+      admin,
+      userId,
+      code: "dispatch_host_not_allowed",
+      message: `Refusing to dispatch to non-allowlisted host. Check NEXT_PUBLIC_SITE_URL.`,
+    });
+    if (toEmail) await sendRunError({ toEmail, toName, step: "strategist" });
+    return;
+  }
 
   const secret = process.env.INTERNAL_DISPATCH_SECRET;
   if (!secret) {
