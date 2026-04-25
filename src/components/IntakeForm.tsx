@@ -3,7 +3,7 @@
 /* global File */
 
 // Intake form. Real GitHub data, real CV upload, free-text moment textarea,
-// POST to /api/anamnesis/run, navigate to /generating. The form is
+// POST to /api/intake/submit, navigate to /generating. The form is
 // editorial-first; live confirm panel mirrors the inputs.
 
 import { useEffect, useState } from "react";
@@ -171,44 +171,50 @@ export default function IntakeForm({
     const momentTrimmed = momentText.trim() || undefined;
 
     try {
-      const res = await fetch("/api/anamnesis/run", {
+      const res = await fetch("/api/intake/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          github_handle: gh.trim(),
           cv_url: cvPath,
-          site_url: siteUrl,
-          declared_interests: tags,
           moment_text: momentTrimmed,
+          declared_interests: tags,
+          site_url: siteUrl,
         }),
       });
-      // 409: a run is already in flight for this user. UI should treat this
-      // as "keep going to /generating" so the user sees the loading screen
-      // and the server resolves the existing run gracefully.
-      if (res.status === 409) {
-        router.push("/generating");
-        return;
-      }
-      // 200 with cached: true: a finished run already exists. Go straight
-      // to the report instead of starting a new one.
-      if (res.status === 200) {
-        const data = await res.json().catch(() => null);
-        if (data && typeof data === "object" && (data as { cached?: boolean }).cached) {
-          router.push("/report");
-          return;
-        }
-      }
+
       if (!res.ok) {
+        const data: unknown = await res.json().catch(() => null);
+        const code =
+          isRecord(data) && typeof data.error === "string" ? data.error : null;
+        const friendly =
+          code === "moment_text_too_long"
+            ? "O texto do momento atual excede 2000 caracteres."
+            : code === "declared_interests_too_many"
+              ? "Selecione no maximo 20 interesses."
+              : code === "invalid_cv_url"
+                ? "O arquivo de CV enviado e invalido. Tente enviar novamente."
+                : "Nao foi possivel iniciar a analise. Tente novamente.";
         setSubmitting(false);
-        setSubmitErr("Could not start the run. Try again.");
+        setSubmitErr(friendly);
         return;
       }
+
+      const data: unknown = await res.json().catch(() => null);
+      const runId =
+        isRecord(data) && typeof data.run_id === "string" ? data.run_id : null;
+      // Reset submitting before navigation so the button is not stuck if the
+      // user soft-navigates back (Next router keeps the form mounted).
+      setSubmitting(false);
+      router.push(
+        runId
+          ? `/generating?step=anamnesis&run_id=${encodeURIComponent(runId)}`
+          : "/generating?step=anamnesis",
+      );
     } catch {
       setSubmitting(false);
-      setSubmitErr("Network error. Try again.");
+      setSubmitErr("Erro de rede. Tente novamente.");
       return;
     }
-    router.push("/generating");
   };
 
   // ── derived display ───────────────────────────────────────────────────
