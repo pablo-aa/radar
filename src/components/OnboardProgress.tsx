@@ -3,14 +3,21 @@
 
 import { Fragment } from "react";
 
-export type OnboardStep = "welcome" | "intake" | "generating" | "report" | "radar";
+export type OnboardStep =
+  | "welcome"
+  | "intake"
+  | "clarify"
+  | "generating"
+  | "report"
+  | "radar";
 
 const STEPS: { key: OnboardStep; label: string }[] = [
   { key: "welcome", label: "01 · Welcome" },
   { key: "intake", label: "02 · Intake" },
-  { key: "generating", label: "03 · Generating" },
-  { key: "report", label: "04 · Report" },
-  { key: "radar", label: "05 · Radar" },
+  { key: "clarify", label: "03 · Confirm" },
+  { key: "generating", label: "04 · Generating" },
+  { key: "report", label: "05 · Report" },
+  { key: "radar", label: "06 · Radar" },
 ];
 
 export default function OnboardProgress({ step }: { step: OnboardStep }) {

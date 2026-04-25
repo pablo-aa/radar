@@ -11,6 +11,7 @@ import type { AnamnesisRun, Profile, RunStatus, StrategistRun } from "@/lib/supa
 export type Destination =
   | "/welcome"
   | "/intake"
+  | "/clarify"
   | "/generating?step=both"
   | "/report"
   | "/radar";
@@ -72,10 +73,17 @@ export function nextDestination(state: RoutingState): Destination {
 
   // First-time onboarding flow below.
 
-  // intake_done = true. The user has submitted; we expect at least one
-  // anamnesis run to exist. If none does, the row was wiped (admin reset)
-  // or insert failed silently. Send back to /intake so the user re-submits.
-  if (anamnesisStatus === null) return "/intake";
+  // intake_done = true. New step: AI generates 3 to 5 clarifying questions
+  // about role / duration / current status, the user answers (or skips),
+  // and only then do we kick off the Anamnesis -> Strategist chain. Without
+  // intake_clarified the anamnesis row will not exist yet either.
+  if (!onboard.intake_clarified) return "/clarify";
+
+  // intake_done = true and clarified. The user has submitted clarifications;
+  // we expect at least one anamnesis run to exist. If none does, the row was
+  // wiped (admin reset) or insert failed silently. Send back to /clarify so
+  // the user re-submits and triggers the dispatch again.
+  if (anamnesisStatus === null) return "/clarify";
 
   // Anamnesis still in progress (pending or running) OR errored: keep on
   // /generating. The page renders progress for in-progress states and an

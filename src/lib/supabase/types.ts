@@ -9,6 +9,10 @@ export type OnboardState = {
   intake_done: boolean;
   report_seen: boolean;
   runs_used: number;
+  // Optional: user has answered (or skipped) the AI-generated clarification
+  // questions on /clarify. Routing blocks /generating until this flips true.
+  // Optional because pre-existing onboard_state rows do not have it.
+  intake_clarified?: boolean;
   // Optional: indicates the user has just finished /report and a /radar nav
   // dot indicator should be shown. Cleared on first /radar visit. Optional
   // because pre-existing onboard_state rows do not have it.
