@@ -1,16 +1,33 @@
 // POST /api/intake/clarify-answers
 //
-// Persists the user's answers to the AI-generated clarification questions
-// and dispatches the chained Anamnesis -> Strategist flow. Returns 202 with
-// the new anamnesis run_id immediately. Front-end then navigates to
-// /generating?step=both as before.
+// Persists the user's answers to the eliminatory + AI clarification
+// questions and dispatches the chained Anamnesis -> Strategist flow. Returns
+// 202 with the new anamnesis run_id immediately; the front-end then
+// navigates to /generating?step=both as before.
 //
-// Request body: { answers: Record<questionId, answerString>, skipped?: boolean }
+// Request body shape:
+//   {
+//     answers: {
+//       <question_id>: {
+//         values: string[],     // option values; empty for short_text
+//         other_text?: string   // free text from "outro" or short_text
+//       }
+//     },
+//     skipped?: boolean
+//   }
 
 import { NextResponse, after, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { chainAnamnesisToStrategist } from "@/lib/agents/anamnesis/chain";
+import { ELIMINATORY_QUESTIONS } from "@/lib/agents/intake-clarify/eliminatory";
+import type {
+  ClarifyAnswerInput,
+  ClarifyAnswerStored,
+  ClarifyAnswerStoredMap,
+  ClarifyQuestion,
+  ClarifyQuestionSet,
+} from "@/lib/agents/intake-clarify/types";
 import type {
   Profile,
   OnboardState,
@@ -22,30 +39,43 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const ANSWER_TEXT_MAX = 600;
+
 type Body = {
   answers?: Record<string, unknown>;
   skipped?: boolean;
 };
 
-function parseBody(raw: unknown): { answers: Record<string, string>; skipped: boolean } {
-  const out = { answers: {} as Record<string, string>, skipped: false };
+function parseAnswers(raw: unknown): {
+  answers: Record<string, ClarifyAnswerInput>;
+  skipped: boolean;
+} {
+  const out: { answers: Record<string, ClarifyAnswerInput>; skipped: boolean } = {
+    answers: {},
+    skipped: false,
+  };
   if (!raw || typeof raw !== "object") return out;
   const r = raw as Body;
   if (r.skipped === true) out.skipped = true;
   if (r.answers && typeof r.answers === "object" && !Array.isArray(r.answers)) {
-    for (const [k, v] of Object.entries(r.answers)) {
-      if (typeof k !== "string") continue;
-      if (typeof v === "string") {
-        const trimmed = v.trim().slice(0, 2000);
-        if (trimmed.length > 0) out.answers[k] = trimmed;
-      }
+    for (const [questionId, payload] of Object.entries(r.answers)) {
+      if (typeof questionId !== "string" || !questionId.trim()) continue;
+      if (!payload || typeof payload !== "object") continue;
+      const p = payload as Record<string, unknown>;
+      const rawValues = p.values;
+      const rawOther = p.other_text;
+      const values: string[] = Array.isArray(rawValues)
+        ? rawValues.filter((v): v is string => typeof v === "string" && v.length > 0)
+        : [];
+      const other_text =
+        typeof rawOther === "string" && rawOther.trim().length > 0
+          ? rawOther.trim().slice(0, ANSWER_TEXT_MAX)
+          : undefined;
+      if (values.length === 0 && !other_text) continue;
+      out.answers[questionId.trim()] = { values, other_text };
     }
   }
   return out;
-}
-
-function toJsonb<T>(v: T): Record<string, unknown> {
-  return v as unknown as Record<string, unknown>;
 }
 
 function asRecord(v: unknown): Record<string, unknown> {
@@ -53,6 +83,76 @@ function asRecord(v: unknown): Record<string, unknown> {
     return v as Record<string, unknown>;
   }
   return {};
+}
+
+function toJsonb<T>(v: T): Record<string, unknown> {
+  return v as unknown as Record<string, unknown>;
+}
+
+function readCachedAi(profile: Profile): ClarifyQuestion[] {
+  const sp = asRecord(profile.structured_profile);
+  const cached = sp.clarify_questions;
+  if (
+    cached &&
+    typeof cached === "object" &&
+    !Array.isArray(cached) &&
+    Array.isArray((cached as Record<string, unknown>).questions)
+  ) {
+    const set = cached as unknown as ClarifyQuestionSet;
+    return Array.isArray(set.questions) ? set.questions : [];
+  }
+  return [];
+}
+
+function buildStoredAnswers(args: {
+  questions: ClarifyQuestion[];
+  raw: Record<string, ClarifyAnswerInput>;
+}): ClarifyAnswerStoredMap {
+  const byId = new Map(args.questions.map((q) => [q.id, q]));
+  const out: ClarifyAnswerStoredMap = {};
+  for (const [qid, ans] of Object.entries(args.raw)) {
+    const q = byId.get(qid);
+    if (!q) continue; // ignore answers that do not belong to a known question
+
+    // Hard-validate selected values against the question's option set, so a
+    // malicious or buggy client cannot inject arbitrary strings into the
+    // payload that downstream agents will read as ground truth.
+    let validValues: string[] = [];
+    let labels: string[] = [];
+    if (q.options && q.options.length > 0) {
+      const optByValue = new Map(q.options.map((o) => [o.value, o.label]));
+      const seen = new Set<string>();
+      for (const v of ans.values) {
+        const label = optByValue.get(v);
+        if (typeof label !== "string") continue;
+        if (seen.has(v)) continue;
+        seen.add(v);
+        validValues.push(v);
+        labels.push(label);
+      }
+      if (q.kind === "single_choice" || q.kind === "scale") {
+        validValues = validValues.slice(0, 1);
+        labels = labels.slice(0, 1);
+      }
+      if (q.kind === "multi_choice" && typeof q.max_select === "number") {
+        validValues = validValues.slice(0, q.max_select);
+        labels = labels.slice(0, q.max_select);
+      }
+    }
+
+    const stored: ClarifyAnswerStored = {
+      question_id: q.id,
+      question: q.question,
+      category: q.category,
+      kind: q.kind,
+      source: q.source,
+      selected_values: validValues,
+      selected_labels: labels,
+      other_text: ans.other_text ?? null,
+    };
+    out[qid] = stored;
+  }
+  return out;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -69,10 +169,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch {
     raw = null;
   }
-  const { answers, skipped } = parseBody(raw);
+  const { answers: rawAnswers, skipped } = parseAnswers(raw);
 
   const admin = createAdminClient();
-
   const profileRead = await admin
     .from("profiles")
     .select("*")
@@ -90,10 +189,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Merge answers into structured_profile.clarify_answers.
+  // Build the universe of valid question IDs from eliminatory + cached AI
+  // set. Any answer not matching a known question is dropped.
+  const allQuestions: ClarifyQuestion[] = [
+    ...ELIMINATORY_QUESTIONS,
+    ...readCachedAi(profile),
+  ];
+
+  const storedAnswers = buildStoredAnswers({
+    questions: allQuestions,
+    raw: rawAnswers,
+  });
+
   const sp = { ...asRecord(profile.structured_profile) };
-  sp.clarify_answers = answers;
-  sp.clarify_skipped = skipped;
+  sp.clarify_answers = storedAnswers;
+  // Anamnesis prompt rule 9 expects clarify_skipped to mean "user opted out
+  // entirely". Honor it only when the request was explicitly marked skipped
+  // AND no answer survived validation. A user who clicks "Pular e gerar
+  // mesmo assim" with partial answers is still cooperating; do not penalize.
+  sp.clarify_skipped = skipped && Object.keys(storedAnswers).length === 0;
   sp.clarify_completed_at = new Date().toISOString();
 
   const newOnboardState: OnboardState = {
@@ -121,8 +235,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Idempotency: if there is already a running anamnesis row in the last
-  // 5 minutes, return it instead of starting another.
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
   const { data: existingRun } = await admin
     .from("anamnesis_runs")
@@ -162,9 +274,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const runId: string = runInsert.data.id;
 
-  // Build the intake payload for Anamnesis. Strip the cached questions blob
-  // (Anamnesis does not need it) but keep clarify_answers so the agent can
-  // ground the profile in the user's confirmed roles / durations / context.
+  // Build the intake payload Anamnesis sees. We strip the AI question cache
+  // (it is presentation, not signal) and pass the answers, skipped flag, and
+  // moment_text / declared_interests / site_url through.
   const intakeForAnamnesis: Record<string, unknown> = { ...sp };
   delete intakeForAnamnesis.clarify_questions;
 
@@ -193,5 +305,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
   });
 
-  return NextResponse.json({ run_id: runId, status: "running" }, { status: 202 });
+  return NextResponse.json(
+    { run_id: runId, status: "running" },
+    { status: 202 },
+  );
 }
