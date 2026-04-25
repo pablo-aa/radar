@@ -90,13 +90,30 @@ function isTextBlock(
   return block.type === "text";
 }
 
-/** Strip markdown code fences if the model wrapped the JSON. */
+/**
+ * Extract a JSON object from the model's free-form text. Handles three
+ * common shapes:
+ *   1. Pure JSON: "{...}"
+ *   2. Markdown-fenced JSON: "```json\n{...}\n```"
+ *   3. JSON with preamble or postamble: "Sure, here is the JSON: {...}"
+ *
+ * The slice between the first `{` and last `}` covers (1) and (3). Fence
+ * stripping must run first because fences themselves contain `{` and `}`
+ * but the slice approach also tolerates them — the inner JSON survives.
+ */
 function stripFences(raw: string): string {
   const trimmed = raw.trim();
-  // ```json ... ``` or ``` ... ```
+  // First pass: drop markdown fences if present.
   const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
-  if (fenceMatch) return fenceMatch[1].trim();
-  return trimmed;
+  const candidate = fenceMatch ? fenceMatch[1].trim() : trimmed;
+  // Second pass: slice between the outermost braces. If the model added
+  // any preamble or trailing prose, this trims it off.
+  const firstBrace = candidate.indexOf("{");
+  const lastBrace = candidate.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return candidate.slice(firstBrace, lastBrace + 1);
+  }
+  return candidate;
 }
 
 function parseProfileJson(raw: string): AnamnesisProfile {
@@ -295,16 +312,22 @@ export async function runAnamnesis(
   ];
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await client.messages.create(
+    // Anthropic requires streaming for any single request that may exceed
+    // 10 minutes. With max_tokens=32768 and the editorial report shape, we
+    // are over that bar. Use the SDK helper which streams under the hood
+    // and returns the fully-aggregated Message at the end — same downstream
+    // shape, no parsing changes needed.
+    const stream = client.messages.stream(
       {
         model: "claude-opus-4-7",
-        max_tokens: 16384,
+        max_tokens: 32768,
         system: ANAMNESIS_SYSTEM_PROMPT,
         tools: ANAMNESIS_TOOLS as unknown as Parameters<typeof client.messages.create>[0]["tools"],
         messages,
       },
       { signal },
     );
+    const res = await stream.finalMessage();
 
     // Accumulate usage from every turn.
     usage.input_tokens += res.usage.input_tokens;
@@ -381,6 +404,14 @@ export async function runAnamnesis(
       };
 
       return output;
+    }
+
+    if (res.stop_reason === "max_tokens") {
+      throw new Error(
+        `Anamnesis agent hit max_tokens cap (${32_768}) before completing the JSON output. ` +
+          `The output was truncated. Either reduce the report scope in the prompt, raise max_tokens further, ` +
+          `or split into two separate calls (profile then report).`,
+      );
     }
 
     throw new Error(

@@ -25,7 +25,13 @@ export default async function GeneratingPage({ searchParams }: PageProps) {
   const runIdParam = params.run_id;
 
   const { destination, profile } = await nextDestinationFor(user.id);
-  if (destination !== "/generating") redirect(destination);
+  // The destination guard only applies to the anamnesis step. For
+  // step=strategist, the user arrives here from /radar's own redirect when
+  // the strategist run is fresh/stale/running. nextDestinationFor only
+  // tracks anamnesis state, so it would loop us back to /radar otherwise.
+  if (step === "anamnesis" && destination !== "/generating") {
+    redirect(destination);
+  }
 
   // Fetch the run row using the admin client (bypasses RLS).
   const admin = createAdminClient();
