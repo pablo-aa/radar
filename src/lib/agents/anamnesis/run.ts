@@ -17,7 +17,11 @@ import type { AnamnesisReport } from "@/lib/sample-data/anamnesis-report";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_ITERATIONS = 12;
-const TIMEOUT_MS = 180_000;
+// 270s leaves a 30s budget for the chained Strategist dispatch inside the
+// /api/intake/clarify-answers route (maxDuration=300). 180s was too tight:
+// runs with rich CVs and many GitHub repos were finishing at 175-180s, and
+// the clarify v2 prompt added ~500 tokens to system + 1-2k to user.
+const TIMEOUT_MS = 270_000;
 
 /** Maximum PDF byte size we will send to the model (2 MB). */
 const CV_MAX_BYTES = 2 * 1024 * 1024;
