@@ -15,7 +15,15 @@ export default function OppCard({
   pick?: PickOverride;
   whyOverride?: string;
 }) {
-  const fitDisplay = pick ? pick.fit_score : (o.fit ?? 0);
+  // null fit on a non-picked opportunity means the Strategist did not rank
+  // it for this user (the agent only ranks the top 12). Render an em-dash
+  // so the UI does not imply "scored 0/100"; that messaging would suggest
+  // a rejection that did not happen.
+  const fitDisplay: number | null = pick
+    ? pick.fit_score
+    : typeof o.fit === "number"
+      ? o.fit
+      : null;
   const why = whyOverride ?? (pick ? pick.why_you : extractWhy(o));
   const isStrategistPick = !!pick;
 
@@ -31,13 +39,19 @@ export default function OppCard({
       <h3>{o.title}</h3>
       <p className="sub">{o.org}</p>
       <div className="fit">
-        <span className="num">{fitDisplay}</span>
+        <span className="num">{fitDisplay ?? "—"}</span>
         <span className="of">/100</span>
         <span className="lbl">fit</span>
-        {isStrategistPick && (
+        {isStrategistPick ? (
           <span className="lbl" style={{ marginLeft: ".5em", color: "var(--accent, #6366f1)" }}>
             · strategist pick
           </span>
+        ) : (
+          fitDisplay === null && (
+            <span className="lbl" style={{ marginLeft: ".5em", color: "var(--ink-4)" }}>
+              · scout · not yet ranked
+            </span>
+          )
         )}
       </div>
       <dl>

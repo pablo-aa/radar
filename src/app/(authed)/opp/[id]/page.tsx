@@ -56,7 +56,14 @@ export default async function OpportunityDetailPage({
   const pick = picksMap.get(o.id);
 
   const deep = extractDeep(o);
-  const fitDisplay = pick ? pick.fit_score : (o.fit ?? 0);
+  // null fit on a non-picked opportunity means the Strategist did not rank
+  // it (top 12 only). Render an em-dash and an empty bar instead of "0/100"
+  // so the UI does not imply a rejection.
+  const fitDisplay: number | null = pick
+    ? pick.fit_score
+    : typeof o.fit === "number"
+      ? o.fit
+      : null;
   const whyDisplay = pick ? pick.why_you : deep.why;
 
   return (
@@ -126,11 +133,11 @@ export default async function OpportunityDetailPage({
           <aside>
             <p className="score">Fit score · Strategist</p>
             <div className="big">
-              {fitDisplay}
+              {fitDisplay ?? "—"}
               <span className="of"> /100</span>
             </div>
             <div className="bar">
-              <i style={{ width: fitDisplay + "%" }}></i>
+              <i style={{ width: (fitDisplay ?? 0) + "%" }}></i>
             </div>
             {deep.fitBreakdown && (
               <div className="breakdown">
