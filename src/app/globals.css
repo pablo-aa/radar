@@ -170,6 +170,22 @@ body::before{
 .appbar nav a .n{ color:var(--ink-4); margin-right:6px }
 .appbar nav a.on .n{ color:var(--accent) }
 
+/* nudge dot: small accent indicator after a nav label, e.g. "02 Radar •" */
+.appbar-nudge-dot{
+  display:inline-block;
+  width:6px; height:6px; border-radius:50%;
+  background:var(--accent);
+  margin-left:8px;
+  vertical-align: middle; transform: translateY(-1px);
+}
+/* In the mobile drawer, the dot sits inside a flex row (.appbar-drawer-it
+ * has gap+align-items:center), which makes vertical-align/transform a no-op
+ * and causes the gap to add extra space before the dot. Reset both. */
+.appbar-drawer-it .appbar-nudge-dot{
+  margin-left: 0;
+  transform: none;
+}
+
 .appbar .who{
   display:inline-flex; align-items:center; gap:10px;
   color:var(--ink);
@@ -1188,6 +1204,30 @@ footer a:hover{ border-bottom-color:var(--ink) }
   display:block; font-size:28px; color:var(--ink); font-weight:700; letter-spacing:-.02em;
   margin-bottom:2px; text-transform:none;
 }
+@media (max-width: 700px){
+  .dash-hd{
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 22px;
+    padding: 24px 0 18px;
+    margin-bottom: 22px;
+  }
+  .dash-hd .eyebrow{
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-bottom: 14px;
+  }
+  .dash-hd h1{
+    font-size: clamp(36px, 9vw, 48px);
+  }
+  .dash-hd .stats{
+    gap: 22px;
+    flex-wrap: wrap;
+  }
+  .dash-hd .stats .stat b{
+    font-size: 24px;
+  }
+}
 
 .filter-row{
   display:flex; gap:8px; flex-wrap:wrap; align-items:center;
@@ -1229,6 +1269,7 @@ footer a:hover{ border-bottom-color:var(--ink) }
   padding: 28px 32px;
   position:relative;
   margin-top: 32px;
+  margin-bottom: 56px;
 }
 .plan::before{
   content:""; position:absolute; left:-1px; top:-1px; width:8px; height:8px; background:var(--accent);

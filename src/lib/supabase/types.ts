@@ -9,6 +9,10 @@ export type OnboardState = {
   intake_done: boolean;
   report_seen: boolean;
   runs_used: number;
+  // Optional: indicates the user has just finished /report and a /radar nav
+  // dot indicator should be shown. Cleared on first /radar visit. Optional
+  // because pre-existing onboard_state rows do not have it.
+  radar_nudged?: boolean;
 };
 
 export type OpportunityCategory =
@@ -197,6 +201,7 @@ export type AnamnesisRun = {
   status: RunStatus;
   output: Record<string, unknown> | null;
   created_at: string;
+  notified_at: string | null;
 };
 
 export type AnamnesisRunInsert = {
@@ -208,6 +213,7 @@ export type AnamnesisRunInsert = {
   status?: RunStatus;
   output?: Record<string, unknown> | null;
   created_at?: string;
+  notified_at?: string | null;
 };
 
 export type AnamnesisRunUpdate = Partial<AnamnesisRunInsert>;
@@ -225,6 +231,7 @@ export type StrategistRun = {
   status: RunStatus;
   cycle_label: string | null;
   created_at: string;
+  notified_at: string | null;
 };
 
 export type StrategistRunInsert = {
@@ -239,6 +246,7 @@ export type StrategistRunInsert = {
   status?: RunStatus;
   cycle_label?: string | null;
   created_at?: string;
+  notified_at?: string | null;
 };
 
 export type StrategistRunUpdate = Partial<StrategistRunInsert>;

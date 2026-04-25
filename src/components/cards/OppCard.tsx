@@ -1,5 +1,9 @@
 import type { Opportunity } from "@/lib/supabase/types";
-import type { PickOverride } from "@/lib/agents/strategist/output-reader";
+import type {
+  BulkScoreEntry,
+  PickOverride,
+} from "@/lib/agents/strategist/output-reader";
+import { displayOrDash } from "@/lib/format";
 
 function truncate(s: string, n: number) {
   return s.length > n ? s.slice(0, n).trim() + "…" : s;
@@ -8,15 +12,32 @@ function truncate(s: string, n: number) {
 export default function OppCard({
   o,
   pick,
+  score,
   whyOverride,
 }: {
   o: Opportunity;
   pick?: PickOverride;
+  score?: BulkScoreEntry;
   whyOverride?: string;
 }) {
-  const fitDisplay = pick ? pick.fit_score : (o.fit ?? 0);
+  // Score precedence:
+  //   pick:  Strategist wrote a full card with rich why_you. Use its fit.
+  //   score: Strategist scored it in bulk (all_scores) but did not write a card.
+  //   o.fit: legacy seed value on the opportunity row (rare; pre-Strategist
+  //          catalogs have it).
+  //   null:  no per-user signal; render an em-dash so the UI does not imply
+  //          "scored 0/100".
+  const fitDisplay: number | null = pick
+    ? pick.fit_score
+    : score
+      ? score.fit_score
+      : typeof o.fit === "number"
+        ? o.fit
+        : null;
+
   const why = whyOverride ?? (pick ? pick.why_you : extractWhy(o));
   const isStrategistPick = !!pick;
+  const isStrategistScored = !pick && !!score;
 
   return (
     <article className="ocard">
@@ -30,20 +51,32 @@ export default function OppCard({
       <h3>{o.title}</h3>
       <p className="sub">{o.org}</p>
       <div className="fit">
-        <span className="num">{fitDisplay}</span>
+        <span className="num">{fitDisplay ?? "—"}</span>
         <span className="of">/100</span>
         <span className="lbl">fit</span>
-        {isStrategistPick && (
-          <span className="lbl" style={{ marginLeft: ".5em", color: "var(--accent, #6366f1)" }}>
+        {isStrategistPick ? (
+          <span
+            className="lbl"
+            style={{ marginLeft: ".5em", color: "var(--accent, #6366f1)" }}
+          >
             · strategist pick
           </span>
+        ) : isStrategistScored ? null : (
+          fitDisplay === null && (
+            <span
+              className="lbl"
+              style={{ marginLeft: ".5em", color: "var(--ink-4)" }}
+            >
+              · scout · not yet ranked
+            </span>
+          )
         )}
       </div>
       <dl>
         <dt>Deadline</dt>
-        <dd>{o.deadline ?? "—"}</dd>
+        <dd>{displayOrDash(o.deadline)}</dd>
         <dt>Funding</dt>
-        <dd>{o.funding_brl ?? "—"}</dd>
+        <dd>{displayOrDash(o.funding_brl)}</dd>
       </dl>
       <div className="why">
         <span className="tag">Why you · Strategist</span>

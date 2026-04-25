@@ -16,10 +16,11 @@ import AnamnesisRisks from "@/components/report/AnamnesisRisks";
 import AnamnesisYearShape from "@/components/report/AnamnesisYearShape";
 import AnamnesisReadings from "@/components/report/AnamnesisReadings";
 import AnamnesisColophon from "@/components/report/AnamnesisColophon";
-import { getProfile, getServerUser } from "@/lib/onboarding";
+import { getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 import type { AnamnesisReport } from "@/lib/sample-data/anamnesis-report";
 import { DEFAULT_ONBOARD_STATE } from "@/lib/supabase/types";
+import { nextDestinationFor } from "@/lib/routing";
 
 async function fetchReport(userId: string): Promise<AnamnesisReport | null> {
   try {
@@ -69,7 +70,16 @@ async function fetchReport(userId: string): Promise<AnamnesisReport | null> {
 export default async function ReportPage() {
   const { user } = await getServerUser();
   if (!user) redirect("/login");
-  const profile = await getProfile(user.id);
+
+  // Allow /report whenever both agents are done, even for returning users
+  // who already flipped report_seen=true. Routing.ts otherwise sends them
+  // straight to /radar, which makes the report unreadable after the first
+  // view (and the email lands here too).
+  const { destination, profile, state } = await nextDestinationFor(user.id);
+  const bothDone =
+    state.anamnesisStatus === "done" && state.strategistStatus === "done";
+  if (!bothDone && destination !== "/report") redirect(destination);
+
   const onboard = profile?.onboard_state ?? DEFAULT_ONBOARD_STATE;
   const firstView = !onboard.report_seen;
   const handle = profile?.github_handle ?? "";
@@ -87,6 +97,7 @@ export default async function ReportPage() {
           userCity=""
           intakeSubmitted={onboard.intake_done}
           onboardComplete={onboard.report_seen}
+          radarNudge={onboard.radar_nudged ?? false}
         />
         {firstView && <OnboardProgress step="report" />}
         <div className="report-empty">
@@ -118,6 +129,7 @@ export default async function ReportPage() {
         userCity=""
         intakeSubmitted={onboard.intake_done}
         onboardComplete={onboard.report_seen}
+        radarNudge={onboard.radar_nudged ?? false}
       />
       {firstView && <OnboardProgress step="report" />}
       <AnamnesisMasthead meta={D.meta} />

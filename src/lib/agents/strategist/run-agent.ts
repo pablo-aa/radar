@@ -11,12 +11,84 @@ import { computeCostUsd } from "./pricing";
 import { buildUserMessage } from "./prompt";
 import { parseRenderCardInput } from "./tool-spec";
 import type {
+  BulkScore,
+  FitBand,
   RenderedCard,
   StrategistInput,
   StrategistOutput,
   StrategistRunMeta,
   UsageSummary,
 } from "./types";
+
+const VALID_BANDS: ReadonlySet<FitBand> = new Set([
+  "high",
+  "medium",
+  "low",
+  "exclude",
+]);
+
+/**
+ * Parse the ALL_SCORES_BEGIN ... ALL_SCORES_END block out of the agent's
+ * final message text. Defensive: returns an empty score list and the
+ * unchanged text if the block is missing, malformed, or the JSON is invalid.
+ *
+ * Also strips the block out of the text so what remains is the run_summary.
+ */
+function parseAllScoresBlock(text: string): {
+  scores: BulkScore[];
+  cleanText: string;
+} {
+  const BEGIN = "ALL_SCORES_BEGIN";
+  const END = "ALL_SCORES_END";
+  const beginIdx = text.indexOf(BEGIN);
+  if (beginIdx < 0) return { scores: [], cleanText: text };
+  const endIdx = text.indexOf(END, beginIdx);
+  if (endIdx < 0) return { scores: [], cleanText: text };
+
+  // Extract from first `[` after BEGIN to last `]` before END.
+  const jsonStart = text.indexOf("[", beginIdx + BEGIN.length);
+  const jsonEnd = text.lastIndexOf("]", endIdx);
+  if (jsonStart < 0 || jsonEnd < 0 || jsonEnd < jsonStart) {
+    return { scores: [], cleanText: text };
+  }
+  const jsonText = text.slice(jsonStart, jsonEnd + 1);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return { scores: [], cleanText: text };
+  }
+  if (!Array.isArray(parsed)) return { scores: [], cleanText: text };
+
+  const scores: BulkScore[] = [];
+  const seen = new Set<string>();
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const oppId = obj.opportunity_id;
+    const fitScore = obj.fit_score;
+    const fitBand = obj.fit_band;
+    if (typeof oppId !== "string" || oppId.length === 0) continue;
+    if (typeof fitScore !== "number" || !Number.isFinite(fitScore)) continue;
+    if (typeof fitBand !== "string") continue;
+    if (!VALID_BANDS.has(fitBand as FitBand)) continue;
+    if (seen.has(oppId)) continue;
+    seen.add(oppId);
+    scores.push({
+      opportunity_id: oppId,
+      fit_score: Math.max(0, Math.min(100, Math.round(fitScore))),
+      fit_band: fitBand as FitBand,
+    });
+  }
+
+  const cleanText = (
+    text.slice(0, beginIdx) + text.slice(endIdx + END.length)
+  )
+    .replace(/```\s*$/g, "")
+    .trim();
+  return { scores, cleanText };
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -149,10 +221,13 @@ async function drainSession(
     });
 
     const stream = await client.beta.sessions.events.stream(sessionId);
+    // 280s leaves a 20s safety margin under Vercel maxDuration=300s.
+    // Earlier value (240s) was tripping mid-flight when the agent's first
+    // turn took longer than 4 minutes on the full 98-opp catalog.
     timeoutId = setTimeout(() => {
       timeoutFired = true;
       stream.controller.abort();
-    }, 240_000);
+    }, 280_000);
     options?.abortSignal?.addEventListener(
       "abort",
       () => {
@@ -245,10 +320,35 @@ async function drainSession(
     });
   }
 
+  // Convert silent failure modes into thrown errors so the caller marks
+  // the row as "error" instead of "done" with empty output.
+  if (exitReason === "abort") {
+    throw new Error(
+      `Strategist stream aborted after timeout. session_id=${sessionId} input_tokens=${usage.input_tokens} output_tokens=${usage.output_tokens}. The agent likely did not finish its first turn within 280s on a 98-opp catalog.`,
+    );
+  }
+  if (usage.input_tokens === 0 && usage.output_tokens === 0) {
+    throw new Error(
+      `Strategist session produced zero tokens. session_id=${sessionId}. The agent never made a model call (no span.model_request_end events observed).`,
+    );
+  }
+
   const finishedAt = new Date().toISOString();
-  const runSummary = lastAgentText || "Strategist run complete.";
-  const transformed = transformCardsToOutput(buffer.getCards(), runSummary);
+  // Extract the bulk-scoring block from the agent's final message.
+  // Falls back to an empty array if the agent skipped it; the UI then
+  // degrades to "—/100" for non-picks.
+  const { scores: allScores, cleanText } = parseAllScoresBlock(lastAgentText);
+  const runSummary = cleanText || "Strategist run complete.";
+  const transformed = transformCardsToOutput(
+    buffer.getCards(),
+    runSummary,
+    allScores,
+  );
   const costUsd = computeCostUsd(usage);
+  console.log("[strategist/run-agent] bulk scores parsed", {
+    session_id: sessionId,
+    score_count: allScores.length,
+  });
 
   const meta: StrategistRunMeta = {
     usage,

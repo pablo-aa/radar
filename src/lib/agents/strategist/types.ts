@@ -110,6 +110,23 @@ export interface StrategistRunMeta {
   };
 }
 
+// Bulk score for an opportunity NOT in the top picks. Lets /radar render
+// a personalized fit_score for every opportunity, not just the 12 the agent
+// chose to write a full why-you for.
+//
+// fit_band buckets the score for UI grouping:
+//   high:    >=65   (visible, strong personalized match)
+//   medium:  40-64  (visible, plausible match)
+//   low:     20-39  (visible but de-emphasized)
+//   exclude: <20    (sent to "Outras oportunidades" footer or hidden)
+export type FitBand = "high" | "medium" | "low" | "exclude";
+
+export interface BulkScore {
+  opportunity_id: string;
+  fit_score: number;
+  fit_band: FitBand;
+}
+
 export interface StrategistOutput {
   // UI-contract fields (primary, read by /radar extractPlan).
   tiers: PlanTier[];
@@ -122,6 +139,9 @@ export interface StrategistOutput {
   rolling: RollingCard[];
   arenas: ArenaCard[];
   ninety_day_plan: PlanEntry[];
+  // Per-user score for every opportunity (including the picks above).
+  // Empty array if the agent did not emit the bulk-scoring block.
+  all_scores: BulkScore[];
   _meta: StrategistRunMeta;
 }
 

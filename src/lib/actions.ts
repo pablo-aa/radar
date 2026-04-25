@@ -29,5 +29,17 @@ export async function markIntakeDone(): Promise<OnboardState | null> {
 export async function markReportSeen(): Promise<OnboardState | null> {
   const { user } = await getServerUser();
   if (!user) return null;
-  return updateOnboardState(user.id, { report_seen: true });
+  // Flip report_seen and arm the radar-nav nudge so the user sees a small
+  // indicator that /radar is the next step. The nudge is cleared on first
+  // /radar visit by markRadarVisited.
+  return updateOnboardState(user.id, {
+    report_seen: true,
+    radar_nudged: true,
+  });
+}
+
+export async function markRadarVisited(): Promise<OnboardState | null> {
+  const { user } = await getServerUser();
+  if (!user) return null;
+  return updateOnboardState(user.id, { radar_nudged: false });
 }

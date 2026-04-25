@@ -2,18 +2,24 @@
 // Route path: /radar (the unauthed root `/` is the landing page).
 // Server component. Reads opportunities, latest scout_run, latest strategist_run.
 
+import { redirect } from "next/navigation";
 import Appbar from "@/components/Appbar";
 import CornerMeta from "@/components/CornerMeta";
 import OppCardLink from "@/components/cards/OppCardLink";
-import StrategistAutoRunner from "@/components/StrategistAutoRunner";
 import AdminRerunButton from "@/components/AdminRerunButton";
-import { getProfile, getServerUser } from "@/lib/onboarding";
+import ClearRadarNudge from "@/components/ClearRadarNudge";
+import { getServerUser } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { isAdminProfile } from "@/lib/admin";
+import { nextDestinationFor } from "@/lib/routing";
 import {
   buildPicksMap,
+  buildScoresMap,
   computeStrategistState,
+  type PicksMap,
+  type ScoresMap,
 } from "@/lib/agents/strategist/output-reader";
+import { computeRuleBasedScores } from "@/lib/scoring/rule-based";
 import type {
   Opportunity,
   OpportunityCategory,
@@ -110,7 +116,11 @@ function minutesAgo(iso: string): string {
 
 export default async function DashboardPage() {
   const { user } = await getServerUser();
-  const profile = user ? await getProfile(user.id) : null;
+  if (!user) redirect("/login");
+
+  const { destination, profile } = await nextDestinationFor(user.id);
+  if (destination !== "/radar") redirect(destination);
+
   const supabase = await createClient();
 
   const [oppsRes, scoutRes, stratRes] = await Promise.all([
@@ -138,16 +148,62 @@ export default async function DashboardPage() {
 
   const currentAnamnesisRunId = profile?.anamnesis_run_id ?? null;
   const strategistState = computeStrategistState(stratRun, currentAnamnesisRunId);
-  const picksMap = buildPicksMap(stratRun);
+
+  // Delegate the wait UX to /generating for all in-progress states.
+  if (
+    strategistState === "fresh" ||
+    strategistState === "stale" ||
+    strategistState === "running"
+  ) {
+    redirect("/generating?step=strategist");
+  }
+
+  // State is "ready" or "error" from here on.
+  const picksMap: PicksMap =
+    strategistState === "ready" ? buildPicksMap(stratRun) : new Map();
+
+  // Bulk score precedence:
+  //   1. Agent-emitted all_scores (Strategist's own bulk scoring; currently
+  //      unused since we ship rule-based, but the hook stays for when an
+  //      LLM scorer is plugged back in).
+  //   2. Deterministic rule-based scoring computed in-process (free, fast).
+  // Picks override scores by id at the OppCard render layer.
+  const agentScoresMap: ScoresMap =
+    strategistState === "ready" ? buildScoresMap(stratRun) : new Map();
+  const ruleScoresMap = computeRuleBasedScores(opps, profile);
+  const scoresMap: ScoresMap =
+    agentScoresMap.size > 0 ? agentScoresMap : ruleScoresMap;
+  const showError = strategistState === "error";
   const isAdmin = isAdminProfile(profile);
 
+  // Effective fit precedence: pick (rich card) > bulk score > legacy seed > none.
+  function effectiveFit(o: Opportunity): number | null {
+    const pick = picksMap.get(o.id);
+    if (pick) return pick.fit_score;
+    const score = scoresMap.get(o.id);
+    if (score) return score.fit_score;
+    return typeof o.fit === "number" ? o.fit : null;
+  }
+
+  // Excluded = bulk-scored as "exclude" AND not a Strategist pick. These go
+  // to the "Outras oportunidades" footer instead of the main category list.
+  function isExcluded(o: Opportunity): boolean {
+    if (picksMap.has(o.id)) return false;
+    const score = scoresMap.get(o.id);
+    return score?.fit_band === "exclude";
+  }
+
   const plan = extractPlan(stratRun);
-  const highest = opps.length > 0 ? Math.max(...opps.map((o) => o.fit ?? 0)) : 0;
+  const highest =
+    opps.length > 0
+      ? Math.max(0, ...opps.map((o) => effectiveFit(o) ?? 0))
+      : 0;
   const openNow = opps.filter((o) => /open|rolling|live|accepting/i.test(o.status ?? "")).length;
   const scoutAgo = scoutRun?.finished_at ? minutesAgo(scoutRun.finished_at) : "47m";
   const cycleLabel = scoutRun?.cycle_label ?? "week 17 · apr 20 to 26, 2026";
 
-  // Re-rank: Strategist picks first (by rank_in_section), non-picks after (by seed fit DESC).
+  // Re-rank within a category: Strategist picks first (by rank_in_section),
+  // then everything else by effective fit DESC (with null fit going last).
   function rerank(items: Opportunity[]): Opportunity[] {
     const picked = items
       .filter((o) => picksMap.has(o.id))
@@ -158,19 +214,29 @@ export default async function DashboardPage() {
       });
     const unpicked = items
       .filter((o) => !picksMap.has(o.id))
-      .sort((a, b) => (b.fit ?? 0) - (a.fit ?? 0));
+      .sort((a, b) => {
+        const fa = effectiveFit(a);
+        const fb = effectiveFit(b);
+        // Nulls sort to the end.
+        if (fa === null && fb === null) return 0;
+        if (fa === null) return 1;
+        if (fb === null) return -1;
+        return fb - fa;
+      });
     return [...picked, ...unpicked];
   }
 
+  // Split opportunities by category, excluding low-fit "Outras oportunidades"
+  // which renders as its own footer section.
+  const visibleOpps = opps.filter((o) => !isExcluded(o));
+  const excludedOpps = opps
+    .filter(isExcluded)
+    .sort((a, b) => (effectiveFit(b) ?? 0) - (effectiveFit(a) ?? 0));
+
   const byCat = CATS.map((c) => ({
     cat: c,
-    items: rerank(opps.filter((o) => o.category === c.id)),
+    items: rerank(visibleOpps.filter((o) => o.category === c.id)),
   })).filter((g) => g.items.length > 0);
-
-  const generating =
-    strategistState === "fresh" ||
-    strategistState === "stale" ||
-    strategistState === "running";
 
   return (
     <div className="wrap">
@@ -183,11 +249,6 @@ export default async function DashboardPage() {
         intakeSubmitted={true}
         onboardComplete={true}
       />
-
-      {/* Auto-trigger on fresh/stale; not on running (already in progress), error, or ready. */}
-      {(strategistState === "fresh" || strategistState === "stale") && (
-        <StrategistAutoRunner />
-      )}
 
       <div className="dash-hd">
         <div>
@@ -231,157 +292,115 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {generating ? (
-        <div
-          style={{
-            padding: "5rem 1rem",
-            textAlign: "center",
-            borderTop: "1px solid var(--ink-5, rgba(26, 26, 23, 0.12))",
-            borderBottom: "1px solid var(--ink-5, rgba(26, 26, 23, 0.12))",
-            margin: "2rem 0",
-          }}
-        >
-          <div
-            style={{
-              fontFamily: "var(--mono)",
-              fontSize: "11px",
-              color: "var(--ink-3)",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              marginBottom: "1.5rem",
-            }}
-          >
-            Strategist · running
-          </div>
-          <h2
-            style={{
-              fontFamily: "var(--mono)",
-              fontSize: "28px",
-              fontWeight: 700,
-              lineHeight: 1.2,
-              margin: 0,
-              maxWidth: "640px",
-              marginLeft: "auto",
-              marginRight: "auto",
-            }}
-          >
-            Reading your profile, ranking the catalog.
-            <span
-              style={{
-                display: "inline-block",
-                width: ".45em",
-                height: ".75em",
-                background: "var(--accent)",
-                marginLeft: ".08em",
-                verticalAlign: "-.05em",
-                animation: "blink 1.05s steps(1) infinite",
-              }}
-            ></span>
-          </h2>
+      {/* 90-day plan above the filter row */}
+      <div className="plan">
+        <h2>Strategist · 90-day plan</h2>
+        {showError ? (
           <p
-            style={{
-              fontFamily: "var(--serif)",
-              fontSize: "16px",
-              color: "var(--ink-2)",
-              marginTop: "1.25rem",
-              maxWidth: "560px",
-              marginLeft: "auto",
-              marginRight: "auto",
-              lineHeight: 1.5,
-            }}
+            className="sub"
+            style={{ color: "var(--red, #c0392b)" }}
           >
-            Claude Opus 4.7 is weighing your trajectory against each opportunity
-            in this week&apos;s catalog. One pass. Output is a 90-day plan and a
-            fit score grounded in your work.
+            Strategist encountered an error on the last run. Showing catalog without personalized ranking.
           </p>
-          <p
-            style={{
-              fontFamily: "var(--mono)",
-              fontSize: "11px",
-              color: "var(--ink-3)",
-              marginTop: "2rem",
-            }}
-          >
-            About 2 to 3 minutes. You can close this tab, results persist.
+        ) : (
+          <p className="sub">
+            generated {plan.generatedAt} · horizon {plan.horizon}
           </p>
-          {isAdmin && (
-            <div style={{ marginTop: "2rem" }}>
-              <AdminRerunButton />
-            </div>
-          )}
-        </div>
-      ) : (
-        <>
-          {/* 90-day plan above the filter row */}
-          <div className="plan">
-            <h2>Strategist · 90-day plan</h2>
-            <p className="sub">
-              generated {plan.generatedAt} · horizon {plan.horizon}
-            </p>
-            <div className="plan-grid">
-              {plan.tiers.map((tier, i) => (
-                <div key={i} className="plan-col">
-                  <h4>
-                    <span>{tier.label}</span> · {tier.range}
-                  </h4>
-                  <ol>
-                    {tier.items.map((it, j) => (
-                      <li key={j}>
-                        {it.text}
-                        <span className="meta">
-                          {it.meta}
-                          {it.ok && <span className="ok"> · strategist picks</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              ))}
-            </div>
-            {isAdmin && (
-              <div style={{ marginTop: "1rem" }}>
-                <AdminRerunButton />
+        )}
+        {!showError && (
+          <div className="plan-grid">
+            {plan.tiers.map((tier, i) => (
+              <div key={i} className="plan-col">
+                <h4>
+                  <span>{tier.label}</span> · {tier.range}
+                </h4>
+                <ol>
+                  {tier.items.map((it, j) => (
+                    <li key={j}>
+                      {it.text}
+                      <span className="meta">
+                        {it.meta}
+                        {it.ok && <span className="ok"> · strategist picks</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
               </div>
-            )}
+            ))}
           </div>
+        )}
+        {isAdmin && (
+          <div style={{ marginTop: "1rem" }}>
+            <AdminRerunButton />
+          </div>
+        )}
+      </div>
 
-          <div className="filter-row">
-            <button className="pill on" type="button">
-              All <span className="ct">{opps.length}</span>
+      <div className="filter-row">
+        <button className="pill on" type="button">
+          All <span className="ct">{visibleOpps.length}</span>
+        </button>
+        {CATS.map((c) => {
+          const n = visibleOpps.filter((o) => o.category === c.id).length;
+          return (
+            <button key={c.id} className="pill" type="button">
+              {c.label} <span className="ct">{n}</span>
             </button>
-            {CATS.map((c) => {
-              const n = opps.filter((o) => o.category === c.id).length;
-              return (
-                <button key={c.id} className="pill" type="button">
-                  {c.label} <span className="ct">{n}</span>
-                </button>
-              );
-            })}
-            <span className="spacer"></span>
-            <span className="sort">Sorted by fit · Strategist weighting</span>
-          </div>
+          );
+        })}
+        <span className="spacer"></span>
+        <span className="sort">Sorted by fit · Strategist weighting</span>
+      </div>
 
-          {byCat.map(({ cat, items }) => (
-            <div key={cat.id} className="dash-section">
-              <div className="category-hd">
-                <h3>
-                  <span className="n">/</span>
-                  {cat.label}
-                </h3>
-                <span>
-                  {items.length} · {cat.hint}
-                </span>
-              </div>
-              <div className="grid-3">
-                {items.map((o) => (
-                  <OppCardLink key={o.id} o={o} pick={picksMap.get(o.id)} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </>
+      {byCat.map(({ cat, items }) => (
+        <div key={cat.id} className="dash-section">
+          <div className="category-hd">
+            <h3>
+              <span className="n">/</span>
+              {cat.label}
+            </h3>
+            <span>
+              {items.length} · {cat.hint}
+            </span>
+          </div>
+          <div className="grid-3">
+            {items.map((o) => (
+              <OppCardLink
+                key={o.id}
+                o={o}
+                pick={picksMap.get(o.id)}
+                score={scoresMap.get(o.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {excludedOpps.length > 0 && (
+        <div className="dash-section">
+          <div className="category-hd">
+            <h3>
+              <span className="n">/</span>
+              Outras oportunidades
+            </h3>
+            <span>
+              {excludedOpps.length} · fit baixo, listadas para descoberta
+            </span>
+          </div>
+          <div className="grid-3">
+            {excludedOpps.map((o) => (
+              <OppCardLink
+                key={o.id}
+                o={o}
+                pick={picksMap.get(o.id)}
+                score={scoresMap.get(o.id)}
+              />
+            ))}
+          </div>
+        </div>
       )}
 
+      <ClearRadarNudge />
       <CornerMeta />
     </div>
   );
