@@ -249,12 +249,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // 7. Read top 12 opportunities by fit.
+  // 7. Read the full opportunity catalog. Strategist now scores every
+  //    opportunity (not just top 12) so we send all of them; the catalog is
+  //    small enough (<100 rows) that input-token cost is reasonable.
   const oppsRead = await admin
     .from("opportunities")
     .select("*")
-    .order("fit", { ascending: false, nullsFirst: false })
-    .limit(12);
+    .order("fit", { ascending: false, nullsFirst: false });
 
   if (oppsRead.error) {
     console.error(

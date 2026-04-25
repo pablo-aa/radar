@@ -1,5 +1,8 @@
 import type { Opportunity } from "@/lib/supabase/types";
-import type { PickOverride } from "@/lib/agents/strategist/output-reader";
+import type {
+  BulkScoreEntry,
+  PickOverride,
+} from "@/lib/agents/strategist/output-reader";
 import { displayOrDash } from "@/lib/format";
 
 function truncate(s: string, n: number) {
@@ -9,23 +12,32 @@ function truncate(s: string, n: number) {
 export default function OppCard({
   o,
   pick,
+  score,
   whyOverride,
 }: {
   o: Opportunity;
   pick?: PickOverride;
+  score?: BulkScoreEntry;
   whyOverride?: string;
 }) {
-  // null fit on a non-picked opportunity means the Strategist did not rank
-  // it for this user (the agent only ranks the top 12). Render an em-dash
-  // so the UI does not imply "scored 0/100"; that messaging would suggest
-  // a rejection that did not happen.
+  // Score precedence:
+  //   pick:  Strategist wrote a full card with rich why_you. Use its fit.
+  //   score: Strategist scored it in bulk (all_scores) but did not write a card.
+  //   o.fit: legacy seed value on the opportunity row (rare; pre-Strategist
+  //          catalogs have it).
+  //   null:  no per-user signal; render an em-dash so the UI does not imply
+  //          "scored 0/100".
   const fitDisplay: number | null = pick
     ? pick.fit_score
-    : typeof o.fit === "number"
-      ? o.fit
-      : null;
+    : score
+      ? score.fit_score
+      : typeof o.fit === "number"
+        ? o.fit
+        : null;
+
   const why = whyOverride ?? (pick ? pick.why_you : extractWhy(o));
   const isStrategistPick = !!pick;
+  const isStrategistScored = !pick && !!score;
 
   return (
     <article className="ocard">
@@ -43,12 +55,18 @@ export default function OppCard({
         <span className="of">/100</span>
         <span className="lbl">fit</span>
         {isStrategistPick ? (
-          <span className="lbl" style={{ marginLeft: ".5em", color: "var(--accent, #6366f1)" }}>
+          <span
+            className="lbl"
+            style={{ marginLeft: ".5em", color: "var(--accent, #6366f1)" }}
+          >
             · strategist pick
           </span>
-        ) : (
+        ) : isStrategistScored ? null : (
           fitDisplay === null && (
-            <span className="lbl" style={{ marginLeft: ".5em", color: "var(--ink-4)" }}>
+            <span
+              className="lbl"
+              style={{ marginLeft: ".5em", color: "var(--ink-4)" }}
+            >
               · scout · not yet ranked
             </span>
           )

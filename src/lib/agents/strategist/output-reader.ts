@@ -4,6 +4,7 @@
 // No imports from run-agent or client; safe to import in Server Components.
 
 import type { StrategistRun } from "@/lib/supabase/types";
+import type { FitBand } from "./types";
 
 export interface PickOverride {
   fit_score: number;
@@ -59,6 +60,47 @@ export function buildPicksMap(run: StrategistRun | null): PicksMap {
     });
   }
 
+  return map;
+}
+
+/**
+ * Per-opportunity bulk score from the Strategist's all_scores block.
+ * Distinct from PickOverride: bulk scores have no why_you prose.
+ */
+export interface BulkScoreEntry {
+  fit_score: number;
+  fit_band: FitBand;
+}
+
+export type ScoresMap = Map<string, BulkScoreEntry>;
+
+const VALID_BANDS = new Set(["high", "medium", "low", "exclude"]);
+
+/**
+ * Build a ScoresMap from a StrategistRun row's output.all_scores array.
+ * Returns an empty map if the run is null, not done, has no output, or the
+ * all_scores field is missing/malformed.
+ */
+export function buildScoresMap(run: StrategistRun | null): ScoresMap {
+  const map: ScoresMap = new Map();
+  if (!run || run.status !== "done" || !run.output) return map;
+  const output = run.output as Record<string, unknown>;
+  const arr = output.all_scores;
+  if (!Array.isArray(arr)) return map;
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const oppId = obj.opportunity_id;
+    const fitScore = obj.fit_score;
+    const fitBand = obj.fit_band;
+    if (typeof oppId !== "string" || oppId.length === 0) continue;
+    if (typeof fitScore !== "number" || !Number.isFinite(fitScore)) continue;
+    if (typeof fitBand !== "string" || !VALID_BANDS.has(fitBand)) continue;
+    map.set(oppId, {
+      fit_score: Math.max(0, Math.min(100, Math.round(fitScore))),
+      fit_band: fitBand as FitBand,
+    });
+  }
   return map;
 }
 

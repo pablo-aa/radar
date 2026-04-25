@@ -4,6 +4,7 @@
 
 import type {
   ArenaCard,
+  BulkScore,
   DatedCard,
   PlanEntry,
   PlanItem,
@@ -256,15 +257,17 @@ export interface TransformedOutput {
   rolling: RollingCard[];
   arenas: ArenaCard[];
   ninety_day_plan: PlanEntry[];
+  all_scores: BulkScore[];
 }
 
 /**
- * Pure transform: cards -> structured output matching the UI contract.
+ * Pure transform: cards + bulk scores -> structured output matching the UI contract.
  * The clock parameter is injectable for deterministic testing.
  */
 export function transformCardsToOutput(
   cards: readonly RenderedCard[],
   runSummary: string,
+  allScores: readonly BulkScore[] = [],
   clock: () => Date = () => new Date(),
 ): TransformedOutput {
   const now = clock();
@@ -293,6 +296,7 @@ export function transformCardsToOutput(
     rolling: rollingCards.map(toRolling),
     arenas: arenaCards.map(toArena),
     ninety_day_plan: planCards.map(toPlanEntry),
+    all_scores: [...allScores],
   };
 }
 

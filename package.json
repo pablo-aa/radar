@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "strategist:setup": "tsx scripts/strategist/create-resources.ts",
     "strategist:list": "tsx scripts/strategist/list-resources.ts",
+    "strategist:update-prompt": "tsx scripts/strategist/update-prompt.ts",
     "scout:setup": "tsx scripts/scout/create-resources.ts",
     "scout:run": "tsx scripts/scout/trigger-run.ts"
   },

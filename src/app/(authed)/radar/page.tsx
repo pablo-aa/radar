@@ -13,7 +13,10 @@ import { isAdminProfile } from "@/lib/admin";
 import { nextDestinationFor } from "@/lib/routing";
 import {
   buildPicksMap,
+  buildScoresMap,
   computeStrategistState,
+  type PicksMap,
+  type ScoresMap,
 } from "@/lib/agents/strategist/output-reader";
 import type {
   Opportunity,
@@ -154,34 +157,73 @@ export default async function DashboardPage() {
   }
 
   // State is "ready" or "error" from here on.
-  const picksMap = strategistState === "ready" ? buildPicksMap(stratRun) : new Map();
+  const picksMap: PicksMap =
+    strategistState === "ready" ? buildPicksMap(stratRun) : new Map();
+  const scoresMap: ScoresMap =
+    strategistState === "ready" ? buildScoresMap(stratRun) : new Map();
   const showError = strategistState === "error";
   const isAdmin = isAdminProfile(profile);
 
+  // Effective fit precedence: pick (rich card) > bulk score > legacy seed > none.
+  function effectiveFit(o: Opportunity): number | null {
+    const pick = picksMap.get(o.id);
+    if (pick) return pick.fit_score;
+    const score = scoresMap.get(o.id);
+    if (score) return score.fit_score;
+    return typeof o.fit === "number" ? o.fit : null;
+  }
+
+  // Excluded = bulk-scored as "exclude" AND not a Strategist pick. These go
+  // to the "Outras oportunidades" footer instead of the main category list.
+  function isExcluded(o: Opportunity): boolean {
+    if (picksMap.has(o.id)) return false;
+    const score = scoresMap.get(o.id);
+    return score?.fit_band === "exclude";
+  }
+
   const plan = extractPlan(stratRun);
-  const highest = opps.length > 0 ? Math.max(...opps.map((o) => o.fit ?? 0)) : 0;
+  const highest =
+    opps.length > 0
+      ? Math.max(0, ...opps.map((o) => effectiveFit(o) ?? 0))
+      : 0;
   const openNow = opps.filter((o) => /open|rolling|live|accepting/i.test(o.status ?? "")).length;
   const scoutAgo = scoutRun?.finished_at ? minutesAgo(scoutRun.finished_at) : "47m";
   const cycleLabel = scoutRun?.cycle_label ?? "week 17 · apr 20 to 26, 2026";
 
-  // Re-rank: Strategist picks first (by rank_in_section), non-picks after (by seed fit DESC).
+  // Re-rank within a category: Strategist picks first (by rank_in_section),
+  // then everything else by effective fit DESC (with null fit going last).
   function rerank(items: Opportunity[]): Opportunity[] {
     const picked = items
-      .filter((o) => (picksMap as Map<string, unknown>).has(o.id))
+      .filter((o) => picksMap.has(o.id))
       .sort((a, b) => {
-        const ra = (picksMap as ReturnType<typeof buildPicksMap>).get(a.id)!.rank_in_section;
-        const rb = (picksMap as ReturnType<typeof buildPicksMap>).get(b.id)!.rank_in_section;
+        const ra = picksMap.get(a.id)!.rank_in_section;
+        const rb = picksMap.get(b.id)!.rank_in_section;
         return ra - rb;
       });
     const unpicked = items
-      .filter((o) => !(picksMap as Map<string, unknown>).has(o.id))
-      .sort((a, b) => (b.fit ?? 0) - (a.fit ?? 0));
+      .filter((o) => !picksMap.has(o.id))
+      .sort((a, b) => {
+        const fa = effectiveFit(a);
+        const fb = effectiveFit(b);
+        // Nulls sort to the end.
+        if (fa === null && fb === null) return 0;
+        if (fa === null) return 1;
+        if (fb === null) return -1;
+        return fb - fa;
+      });
     return [...picked, ...unpicked];
   }
 
+  // Split opportunities by category, excluding low-fit "Outras oportunidades"
+  // which renders as its own footer section.
+  const visibleOpps = opps.filter((o) => !isExcluded(o));
+  const excludedOpps = opps
+    .filter(isExcluded)
+    .sort((a, b) => (effectiveFit(b) ?? 0) - (effectiveFit(a) ?? 0));
+
   const byCat = CATS.map((c) => ({
     cat: c,
-    items: rerank(opps.filter((o) => o.category === c.id)),
+    items: rerank(visibleOpps.filter((o) => o.category === c.id)),
   })).filter((g) => g.items.length > 0);
 
   return (
@@ -284,10 +326,10 @@ export default async function DashboardPage() {
 
       <div className="filter-row">
         <button className="pill on" type="button">
-          All <span className="ct">{opps.length}</span>
+          All <span className="ct">{visibleOpps.length}</span>
         </button>
         {CATS.map((c) => {
-          const n = opps.filter((o) => o.category === c.id).length;
+          const n = visibleOpps.filter((o) => o.category === c.id).length;
           return (
             <button key={c.id} className="pill" type="button">
               {c.label} <span className="ct">{n}</span>
@@ -311,11 +353,40 @@ export default async function DashboardPage() {
           </div>
           <div className="grid-3">
             {items.map((o) => (
-              <OppCardLink key={o.id} o={o} pick={(picksMap as ReturnType<typeof buildPicksMap>).get(o.id)} />
+              <OppCardLink
+                key={o.id}
+                o={o}
+                pick={picksMap.get(o.id)}
+                score={scoresMap.get(o.id)}
+              />
             ))}
           </div>
         </div>
       ))}
+
+      {excludedOpps.length > 0 && (
+        <div className="dash-section">
+          <div className="category-hd">
+            <h3>
+              <span className="n">/</span>
+              Outras oportunidades
+            </h3>
+            <span>
+              {excludedOpps.length} · fit baixo, listadas para descoberta
+            </span>
+          </div>
+          <div className="grid-3">
+            {excludedOpps.map((o) => (
+              <OppCardLink
+                key={o.id}
+                o={o}
+                pick={picksMap.get(o.id)}
+                score={scoresMap.get(o.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <CornerMeta />
     </div>
