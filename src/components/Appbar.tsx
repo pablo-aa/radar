@@ -198,7 +198,7 @@ export default function Appbar({
             <div className="avatar-menu-sep"></div>
             <a
               className="avatar-menu-it dim"
-              href="https://github.com/pabloaa/radar"
+              href="https://github.com/pablo-aa/radar"
               target="_blank"
               rel="noopener noreferrer"
               onClick={() => setMenuOpen(false)}

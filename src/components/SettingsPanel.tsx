@@ -252,7 +252,7 @@ export default function SettingsPanel({
             </span>
             <a
               className="btn sm ghost"
-              href="https://github.com/pabloaa/radar"
+              href="https://github.com/pablo-aa/radar"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -267,7 +267,7 @@ export default function SettingsPanel({
             </span>
             <a
               className="btn sm ghost"
-              href="https://github.com/pabloaa/radar#self-host"
+              href="https://github.com/pablo-aa/radar#self-host"
               target="_blank"
               rel="noopener noreferrer"
             >

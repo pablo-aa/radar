@@ -372,8 +372,8 @@ function Footer() {
   return (
     <footer>
       <div className="col">
-        <a href="https://github.com/pabloaa/radar">github.com/pabloaa/radar</a>
-        <a href="mailto:radar@pabloaa.com">radar@pabloaa.com</a>
+        <a href="https://github.com/pablo-aa/radar">github.com/pablo-aa/radar</a>
+        <a href="mailto:contato@pabloaa.com">contato@pabloaa.com</a>
       </div>
       <div className="col">
         <span>radar.pabloaa.com</span>
