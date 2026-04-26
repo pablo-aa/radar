@@ -3,8 +3,8 @@
 ![Radar — a visual history of the opportunities Brazilian developers miss](docs/assets/hero.webp)
 
 > A career-plan platform for Brazilian developers. Three Claude Opus 4.7
-> Managed Agents read you, crawl the world, and write a personal 90-day
-> plan around the grants, fellowships, and bolsas you didn't know existed,
+> agents read you, crawl the world, and write a personal 90-day plan
+> around the grants, fellowships, and bolsas you didn't know existed,
 > and didn't know you'd be a fit for.
 
 **Live demo:** [radar.pabloaa.com](https://radar.pabloaa.com)
@@ -26,13 +26,13 @@ I went to Japan twice through METI, the Ministry of Economy, Trade and Industry.
 
 ## What it does
 
-Three composed Anthropic Managed Agents:
+Three composed agents on Claude Opus 4.7:
 
 1. **Anamnesis** reads your GitHub, an optional CV, and a personal site URL. It builds a structured profile plus a rich editorial self-portrait: archetype, peer constellation, year-shape, three-year vectors, recommended readings.
 2. **Scout** is one shared long-running Managed Agent session that crawls 1,240+ curated sources weekly (FAPESP, Emergent Ventures, Chevening, MEXT, Y Combinator, Fundação Estudar, GSoC, MATS, ...) and persists structured opportunities to Supabase. At every run it discovers and queues 2-5 adjacent sources for the next pass.
 3. **Strategist** runs per user, applies eliminatory clarify-answer filters (relocation appetite, time budget, study appetite, ambition vector), ranks opportunities against the profile, writes a *why-you* paragraph that cites specific profile fields, and produces a 90-day plan tied to each card.
 
-All three use the Anthropic Managed Agents API (beta) with sessions reused across runs, custom tools (`render_card`, `query_opps`, `upsert_opportunity`, `fetch_github_profile`), streaming 32k-token outputs, and per-user memory.
+Scout and Strategist run on the Anthropic Managed Agents API (beta), with sessions reused across runs, custom tools (`render_card`, `query_opps`, `upsert_opportunity`, `mark_discarded`, `suggest_source`), and per-user memory on Strategist. Anamnesis runs on the Messages API with streaming and 32k-token outputs, because the editorial render does not benefit from session memory and the PDF document-block flow was simpler on plain Messages. See [`docs/03-managed-agents-deep-dive.md`](docs/03-managed-agents-deep-dive.md) for the full reasoning.
 
 ## Architecture
 

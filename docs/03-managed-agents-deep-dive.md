@@ -1,20 +1,21 @@
 # Managed Agents — design decisions
 
-Why Radar is built on three composed Anthropic Managed Agents and not on the Messages API alone. Companion to [`02-architecture.md`](02-architecture.md).
+Why two of Radar's three agents (Scout and Strategist) run on Anthropic's Managed Agents API instead of plain Messages, and why Anamnesis goes the other way. Companion to [`02-architecture.md`](02-architecture.md).
 
 ## The composition
 
-Anamnesis, Scout, Strategist. Three Managed Agent resources, each created once and reused by ID across every session. None of them are recreated per request, which is the failure mode the early Managed Agents documentation warns about and the one our first capacity test hit.
+Scout and Strategist run as Managed Agent resources, each created once and reused by ID across every session. Neither is recreated per request, which is the failure mode the early Managed Agents documentation warns about and the one our first capacity test hit.
 
-| Agent | Pattern | Lifecycle | Tools |
+| Agent (MA) | Pattern | Lifecycle | Tools |
 |---|---|---|---|
-| Anamnesis | per-user session, fire-and-forget | minutes per run, quarterly re-runs | `fetch_github_profile`, `fetch_github_repos`, optional CV PDF block |
 | Scout | single shared long-running session | weeks of idle between weekly bursts | `web_search`, `web_fetch`, `upsert_opportunity`, `mark_discarded`, `suggest_source` |
 | Strategist | per-user session with memory | seconds per run, on intake submit and on demand | `query_opps`, `render_card` |
 
-## Why this is a Managed Agents problem and not a Messages API problem
+Anamnesis is the third agent and does not run on Managed Agents. It uses `client.messages.stream` with `max_tokens: 32_768`, the `fetch_github_profile` and `fetch_github_repos` Messages-API tools, and an optional PDF document block. Reasoning under "Why Anamnesis is on Messages" below.
 
-A flat call to `messages.create` would fail in three places.
+## Why Scout and Strategist are on Managed Agents
+
+A flat call to `messages.create` would fail in two places.
 
 ### 1. Scout's runtime
 
@@ -28,11 +29,15 @@ Cards need to appear on screen as the agent reasons, not after a JSON blob is pa
 
 Each `render_card` call carries the full card payload (opportunity_id, fit_score, why_you, prep_required, ...), so the UI can render without waiting for the agent's final summary message.
 
-### 3. Anamnesis's output length
+## Why Anamnesis is on Messages, not Managed Agents
 
-The editorial report (archetype, peers, territory, vectors, year-shape, readings) regularly approaches the 16k cliff for a rich profile. We stream with `max_tokens: 32768` and a defensive parser that slices between the first `{` and last `}` (with `jsonrepair` as a fallback) before validation.
+We considered making Anamnesis a third Managed Agent for symmetry. We didn't, for three reasons.
 
-Streaming is also a hard requirement on Anthropic's side: any request that may exceed 10 minutes must use the streaming API. Our long-context Anamnesis runs on a CV-rich profile do.
+The editorial report it produces (archetype, peers, territory, vectors, year-shape, readings) is one big stateless render. There is no cross-session memory to amortize: each user's report is regenerated from scratch on a quarterly cadence, and there is no per-session state that needs to survive between calls. The MA primitives that pay for themselves on Scout and Strategist (long-running session, `custom_tool_use` streaming) would have added complexity without payoff.
+
+The PDF document-block flow for CV ingestion was simpler to land on plain Messages. The Messages API accepts document blocks inline; routing the same payload through MA's tool-use envelope would have meant extra plumbing for no behavioral gain.
+
+The output-length problem was solvable on Messages. The report regularly approaches the 16k cliff for a rich profile, so we stream with `max_tokens: 32_768` and a defensive parser that slices between the first `{` and last `}` (with `jsonrepair` as a fallback). Streaming is also a hard requirement on Anthropic's side: any request that may exceed 10 minutes must use the streaming API, and our long-context Anamnesis runs on a CV-rich profile do.
 
 ## Eliminatory clarify questions as typed agent input
 
@@ -47,7 +52,7 @@ The full filter ruleset lives in Strategist's system prompt (`src/lib/agents/str
 - **Multi-agent direct messaging.** We coordinate between agents via Supabase events, not Claude-to-Claude messages. Multi-agent is research preview, our deadline isn't.
 - **Sub-agents per micro-task.** We use skills patterns inside each agent's system prompt instead of spawning sub-agents. Cheaper, simpler, easier to reason about.
 - **Hand-rolled retrieval.** Strategist reads from Supabase via `query_opps`, a custom tool that returns structured rows. No vector store, no embedding pipeline. The catalog is small enough that the agent reasons over it directly.
-- **Closed-source models or wrappers.** Every agent runs on Claude Opus 4.7 directly via the Managed Agents API. No proxy, no LangChain, no custom orchestrator.
+- **Closed-source models or wrappers.** Every agent runs on Claude Opus 4.7 directly (via Managed Agents for Scout and Strategist, via Messages for Anamnesis). No proxy, no LangChain, no custom orchestrator.
 
 ## What we'd add when the platform allows
 
